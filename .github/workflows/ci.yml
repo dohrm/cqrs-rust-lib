@@ -23,7 +23,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Run tests
-        run: cargo test --all-features
+        run: |
+          cargo test --all-features
+          cargo test -p example
         env:
           MONGODB_TEST_URI: mongodb://localhost:27017
 
@@ -39,7 +41,7 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Run clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --all -- -D warnings
 
   build:
     name: Build

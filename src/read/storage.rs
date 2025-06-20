@@ -3,9 +3,8 @@ use crate::read::sorter::Sorter;
 use crate::{Aggregate, AggregateError, CqrsContext, View};
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;
-use utoipa::PartialSchema;
 #[cfg(feature = "utoipa")]
-use utoipa::ToSchema;
+use utoipa::{PartialSchema, ToSchema};
 
 #[async_trait::async_trait]
 pub trait Storage<A>: Clone + Debug + Send + Sync

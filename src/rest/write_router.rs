@@ -1,26 +1,22 @@
 use crate::engine::CqrsCommandEngine;
 use crate::event_store::EventStore;
-use crate::read::Storage;
+use crate::rest::helpers;
 use crate::{Aggregate, AggregateError, CqrsContext};
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use axum::routing::{get, post, put};
+use axum::routing::{post, put};
 use axum::{Extension, Json};
 use http::StatusCode;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
-use utoipa::openapi::path::{OperationBuilder, ParameterBuilder, ParameterIn};
-use utoipa::openapi::request_body::RequestBody;
-use utoipa::openapi::{
-    Content, HttpMethod, PathItem, Paths, PathsBuilder, RefOr, Required, ResponseBuilder, Schema,
-};
+use utoipa::openapi::{HttpMethod, RefOr, Schema};
 use utoipa::{PartialSchema, ToSchema};
 use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouter};
 
 #[derive(Clone)]
-pub struct CQRSRouter<A, ES>
+pub struct CQRSWriteRouter<A, ES>
 where
     A: Aggregate + ToSchema,
     ES: EventStore<A>,
@@ -29,12 +25,27 @@ where
     engine: Arc<CqrsCommandEngine<A, ES>>,
 }
 
-impl<A, ES> CQRSRouter<A, ES>
+struct CommandData {
+    name: String,
+    schema: Schema,
+    discriminator: Option<(String, String)>,
+}
+
+impl CommandData {
+    fn new(name: String, schema: Schema, discriminator: Option<(String, String)>) -> Self {
+        Self {
+            name,
+            schema,
+            discriminator,
+        }
+    }
+}
+
+impl<A, ES> CQRSWriteRouter<A, ES>
 where
     A: Aggregate + ToSchema + 'static,
     ES: EventStore<A> + 'static,
 {
-    const TYPE: &'static str = A::TYPE;
     #[must_use]
     fn new(engine: CqrsCommandEngine<A, ES>) -> Self {
         Self {
@@ -43,93 +54,10 @@ where
         }
     }
 
-    fn method_to_string(method: &HttpMethod) -> &'static str {
-        match method {
-            HttpMethod::Get => "get",
-            HttpMethod::Post => "post",
-            HttpMethod::Put => "put",
-            HttpMethod::Delete => "delete",
-            HttpMethod::Patch => "patch",
-            HttpMethod::Options => "options",
-            HttpMethod::Head => "head",
-            HttpMethod::Trace => "trace",
-        }
-    }
-
-    fn generate_route(
-        method: HttpMethod,
-        path: &str,
-        response: RefOr<Schema>,
-        path_parameters: Vec<(&str, RefOr<Schema>)>,
-        query_parameters: Vec<(&str, RefOr<Schema>, bool)>,
-        body: Option<Schema>,
-    ) -> Paths {
-        let code = match &method {
-            HttpMethod::Post => "201",
-            _ => "200",
-        };
-        let mut operation = OperationBuilder::new()
-            .response(
-                code,
-                ResponseBuilder::new().content("application/json", Content::new(Some(response))),
-            )
-            .operation_id(Some(format!(
-                "{}-{}-{}",
-                Self::TYPE,
-                Self::method_to_string(&method),
-                path.replace("/", "-")
-            )))
-            // .deprecated(Some(Deprecated::False))
-            // .summary(Some("Summary"))
-            // .description(Some("Description"))
-            .tag(Self::TYPE);
-
-        for (name, schema) in path_parameters {
-            operation = operation.parameter(
-                ParameterBuilder::new()
-                    .name(name)
-                    .parameter_in(ParameterIn::Path)
-                    .required(Required::True)
-                    // .deprecated(Some(Deprecated::False))
-                    // .description(Some("xxx"))
-                    .schema(Some(schema)),
-            );
-        }
-
-        for (name, schema, required) in query_parameters {
-            operation = operation.parameter(
-                ParameterBuilder::new()
-                    .name(name)
-                    .parameter_in(ParameterIn::Query)
-                    .required(if required {
-                        Required::True
-                    } else {
-                        Required::False
-                    })
-                    // .deprecated(Some(Deprecated::False))
-                    // .description(Some("xxx"))
-                    .schema(Some(schema)),
-            );
-        }
-        if let Some(body) = body {
-            operation = operation.request_body(Some(
-                RequestBody::builder()
-                    .content("application/json", Content::new(Some(body)))
-                    .build(),
-            ));
-        }
-        PathsBuilder::new()
-            .path(path, PathItem::new(method, operation.build()))
-            .build()
-    }
-
-    fn read_commands(
-        name: &str,
-        schema: RefOr<Schema>,
-    ) -> Vec<(String, Schema, Option<(String, String)>)> {
+    fn read_commands(name: &str, schema: RefOr<Schema>) -> Vec<CommandData> {
         let mut result = vec![];
-        match &schema {
-            RefOr::T(t) => match t {
+        if let RefOr::T(t) = &schema {
+            match t {
                 Schema::Object(o) => {
                     let discriminator = o.properties.iter().find_map(|c| match c.1 {
                         RefOr::T(Schema::Object(o)) => {
@@ -157,7 +85,7 @@ where
                     } else {
                         (name.to_string(), t.clone())
                     };
-                    result.push((current_name, schema_body, discriminator));
+                    result.push(CommandData::new(current_name, schema_body, discriminator));
                 }
                 Schema::OneOf(items) => {
                     for item in &items.items {
@@ -170,8 +98,7 @@ where
                     }
                 }
                 _ => (),
-            },
-            _ => (),
+            }
         }
         result
     }
@@ -197,7 +124,7 @@ where
                 continue;
             }
 
-            if c.is_uppercase() && prev_char.map_or(false, |pc| pc.is_lowercase()) {
+            if c.is_uppercase() && prev_char.is_some_and(|pc| pc.is_lowercase()) {
                 result.push('-');
             }
 
@@ -207,56 +134,23 @@ where
         result
     }
 
-    pub fn routes(
-        engine: CqrsCommandEngine<A, ES>,
-        views: Vec<Arc<impl Storage<A>>>,
-    ) -> OpenApiRouter {
-        let context = CQRSRouter::new(engine);
+    pub fn routes(engine: CqrsCommandEngine<A, ES>) -> OpenApiRouter {
+        let context = CQRSWriteRouter::new(engine);
         let mut schemas = vec![];
         A::schemas(&mut schemas);
         A::CreateCommand::schemas(&mut schemas);
         A::UpdateCommand::schemas(&mut schemas);
 
-        let mut result = OpenApiRouter::<CQRSRouter<A, ES>>::new();
+        let mut result = OpenApiRouter::<CQRSWriteRouter<A, ES>>::new();
 
-        for view in views {
-            let mut current_schemas = schemas.clone();
-            view.schemas(&mut current_schemas);
-            let mut subroute = OpenApiRouter::new();
-            let base_route = format!("/{}", view.name());
-            let many = Self::generate_route(
-                HttpMethod::Get,
-                base_route.as_str(),
-                view.paged_result_schema(),
-                vec![],
-                vec![], // TODO Generate that
-                None,
-            );
-            let one = Self::generate_route(
-                HttpMethod::Get,
-                format!("{}/{{aggregate_id}}", base_route)
-                    .replace("//", "/")
-                    .as_str(),
-                view.result_schema(),
-                vec![("aggregate_id", String::schema())],
-                vec![],
-                None,
-            );
-            let current_read_engine = view;
-            subroute = subroute.routes(UtoipaMethodRouter::<CQRSRouter<A, ES>>::from((
-                current_schemas,
-                many,
-                get(move |Extension(context): Extension<CqrsContext>,| async {
-                    current_read_engine.filter()
-                }),
-            )));
-            
-        }
-
-        for (name, schema, discriminator) in
-            Self::read_commands(&A::CreateCommand::name(), A::CreateCommand::schema())
+        for CommandData {
+            name,
+            schema,
+            discriminator,
+        } in Self::read_commands(&A::CreateCommand::name(), A::CreateCommand::schema())
         {
-            let paths = Self::generate_route(
+            let paths = helpers::generate_route(
+                A::TYPE,
                 HttpMethod::Post,
                 format!("/commands/{}", Self::sanitize_route_name(&name)).as_str(),
                 A::schema(),
@@ -265,11 +159,11 @@ where
                 Some(schema),
             );
             let current_discriminator = discriminator.clone();
-            result = result.routes(UtoipaMethodRouter::<CQRSRouter<A, ES>>::from((
+            result = result.routes(UtoipaMethodRouter::<CQRSWriteRouter<A, ES>>::from((
                 schemas.clone(),
                 paths,
                 post(
-                    move |State(router): State<CQRSRouter<A, ES>>,
+                    move |State(router): State<CQRSWriteRouter<A, ES>>,
                           Extension(context): Extension<CqrsContext>,
                           Json(command): Json<Value>| async {
                         Self::create(router, command, current_discriminator, context).await
@@ -278,10 +172,14 @@ where
             )))
         }
 
-        for (name, schema, discriminator) in
-            Self::read_commands(&A::UpdateCommand::name(), A::UpdateCommand::schema())
+        for CommandData {
+            name,
+            schema,
+            discriminator,
+        } in Self::read_commands(&A::UpdateCommand::name(), A::UpdateCommand::schema())
         {
-            let paths = Self::generate_route(
+            let paths = helpers::generate_route(
+                A::TYPE,
                 HttpMethod::Put,
                 format!(
                     "/{{aggregate_id}}/commands/{}",
@@ -294,11 +192,11 @@ where
                 Some(schema.clone()),
             );
             let current_discriminator = discriminator.clone();
-            result = result.routes(UtoipaMethodRouter::<CQRSRouter<A, ES>>::from((
+            result = result.routes(UtoipaMethodRouter::<CQRSWriteRouter<A, ES>>::from((
                 schemas.clone(),
                 paths,
                 put(
-                    move |State(router): State<CQRSRouter<A, ES>>,
+                    move |State(router): State<CQRSWriteRouter<A, ES>>,
                           Path(aggregate_id): Path<String>,
                           Extension(context): Extension<CqrsContext>,
                           Json(command): Json<Value>| async {
@@ -365,7 +263,7 @@ where
     }
 
     pub async fn create(
-        router: CQRSRouter<A, ES>,
+        router: CQRSWriteRouter<A, ES>,
         mut command: Value,
         discriminator: Option<(String, String)>,
         context: CqrsContext,
@@ -390,7 +288,7 @@ where
     }
 
     pub async fn update(
-        router: CQRSRouter<A, ES>,
+        router: CQRSWriteRouter<A, ES>,
         aggregate_id: String,
         mut command: Value,
         discriminator: Option<(String, String)>,

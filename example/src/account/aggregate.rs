@@ -1,5 +1,5 @@
-use cqrs_rust_lib::CqrsContext;
-use cqrs_rust_lib::{Aggregate, Event};
+use crate::account::{CreateCommands, Events, UpdateCommands};
+use cqrs_rust_lib::{Aggregate, CqrsContext};
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::io::ErrorKind;
@@ -13,7 +13,7 @@ pub struct Account {
 
 #[async_trait::async_trait]
 impl Aggregate for Account {
-    const TYPE: &'static str = "";
+    const TYPE: &'static str = "accounts";
 
     type CreateCommand = CreateCommands;
     type UpdateCommand = UpdateCommands;
@@ -21,12 +21,12 @@ impl Aggregate for Account {
     type Services = ();
     type Error = std::io::Error;
 
+    fn aggregate_id(&self) -> String {
+        self.id.clone()
+    }
     fn with_aggregate_id(mut self, id: String) -> Self {
         self.id = id;
         self
-    }
-    fn aggregate_id(&self) -> String {
-        self.id.clone()
     }
 
     async fn handle_create(
@@ -86,30 +86,4 @@ impl Aggregate for Account {
     fn error(_status: StatusCode, details: &str) -> Self::Error {
         std::io::Error::new(ErrorKind::AddrInUse, details.to_string())
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-pub enum Events {
-    AccountCreated,
-    Deposited { amount: f64 },
-    Withdrawn { amount: f64 },
-    Closed,
-}
-
-impl Event for Events {
-    fn event_type(&self) -> String {
-        "accounts".to_string()
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub enum CreateCommands {
-    Create,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub enum UpdateCommands {
-    Deposit { amount: f64 },
-    Withdraw { amount: f64 },
-    Close,
 }

@@ -1,13 +1,9 @@
-mod models;
-
 #[cfg(test)]
-#[cfg(feature = "mongodb")]
 mod integration_tests {
-    use crate::models;
-    use crate::models::{CreateCommands, UpdateCommands};
-    use cqrs_rust_lib::CqrsContext;
-    use cqrs_rust_lib::es::EventStoreImpl;
     use cqrs_rust_lib::es::persist::Persist;
+    use cqrs_rust_lib::es::EventStoreImpl;
+    use cqrs_rust_lib::CqrsContext;
+    use example::account::{Account, CreateCommands, UpdateCommands};
     use mongodb::{Client, Database};
     use std::env;
 
@@ -24,7 +20,7 @@ mod integration_tests {
 
     async fn testcases<P>(store: P)
     where
-        P: Persist<models::Account>,
+        P: Persist<Account>,
     {
         let event_store = EventStoreImpl::new(store);
         let engine = cqrs_rust_lib::CqrsCommandEngine::new(event_store, vec![], ());
@@ -59,13 +55,13 @@ mod integration_tests {
     #[tokio::test]
     async fn test_mongodb_event_store() {
         let db = setup_test_db().await;
-        let store = cqrs_rust_lib::es::mongodb::MongoDBPersist::<models::Account>::new(db);
+        let store = cqrs_rust_lib::es::mongodb::MongoDBPersist::<Account>::new(db);
         testcases(store).await;
     }
 
     #[tokio::test]
     async fn test_inmemory_event_store() {
-        let store = cqrs_rust_lib::es::inmemory::InMemoryPersist::<models::Account>::new();
+        let store = cqrs_rust_lib::es::inmemory::InMemoryPersist::<Account>::new();
         testcases(store).await;
     }
 }
