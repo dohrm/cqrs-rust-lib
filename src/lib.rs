@@ -15,6 +15,8 @@ mod event_store;
 pub use event_store::*;
 
 pub mod es;
+pub mod read;
+
 #[cfg(feature = "utoipa")]
 pub mod rest;
 

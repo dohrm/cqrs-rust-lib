@@ -1,12 +1,13 @@
 use crate::engine::CqrsCommandEngine;
 use crate::event_store::EventStore;
+use crate::read::Storage;
 use crate::{Aggregate, AggregateError, CqrsContext};
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use axum::routing::{post, put};
+use axum::routing::{get, post, put};
 use axum::{Extension, Json};
 use http::StatusCode;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -206,7 +207,10 @@ where
         result
     }
 
-    pub fn routes(engine: CqrsCommandEngine<A, ES>) -> OpenApiRouter {
+    pub fn routes(
+        engine: CqrsCommandEngine<A, ES>,
+        views: Vec<Arc<impl Storage<A>>>,
+    ) -> OpenApiRouter {
         let context = CQRSRouter::new(engine);
         let mut schemas = vec![];
         A::schemas(&mut schemas);
@@ -214,6 +218,40 @@ where
         A::UpdateCommand::schemas(&mut schemas);
 
         let mut result = OpenApiRouter::<CQRSRouter<A, ES>>::new();
+
+        for view in views {
+            let mut current_schemas = schemas.clone();
+            view.schemas(&mut current_schemas);
+            let mut subroute = OpenApiRouter::new();
+            let base_route = format!("/{}", view.name());
+            let many = Self::generate_route(
+                HttpMethod::Get,
+                base_route.as_str(),
+                view.paged_result_schema(),
+                vec![],
+                vec![], // TODO Generate that
+                None,
+            );
+            let one = Self::generate_route(
+                HttpMethod::Get,
+                format!("{}/{{aggregate_id}}", base_route)
+                    .replace("//", "/")
+                    .as_str(),
+                view.result_schema(),
+                vec![("aggregate_id", String::schema())],
+                vec![],
+                None,
+            );
+            let current_read_engine = view;
+            subroute = subroute.routes(UtoipaMethodRouter::<CQRSRouter<A, ES>>::from((
+                current_schemas,
+                many,
+                get(move |Extension(context): Extension<CqrsContext>,| async {
+                    current_read_engine.filter()
+                }),
+            )));
+            
+        }
 
         for (name, schema, discriminator) in
             Self::read_commands(&A::CreateCommand::name(), A::CreateCommand::schema())

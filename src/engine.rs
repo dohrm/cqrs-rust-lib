@@ -11,14 +11,14 @@ use std::collections::HashMap;
 ///
 /// # Type Parameters
 /// - `A`: The type of the aggregate managed by this CQRS engine.
-///        The aggregate represents the domain behavior and state transitions.
+///   The aggregate represents the domain behavior and state transitions.
 /// - `ES`: The type of the event store used to persist events related to the aggregate.
 ///
 /// # Bounds
 /// - `A`: Must implement the `Aggregate` trait. This ensures the aggregate provides necessary
-///         functionality such as validating commands or applying events to mutate its state.
+///   functionality such as validating commands or applying events to mutate its state.
 /// - `ES`: Must implement the `EventStore<A>` trait. This ensures the event store works
-///          with the specified aggregate type for persisting and retrieving events.
+///   with the specified aggregate type for persisting and retrieving events.
 ///
 /// # Fields
 /// - `store: ES`
