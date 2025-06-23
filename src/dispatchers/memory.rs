@@ -45,7 +45,6 @@ impl<A: Aggregate> Default for InMemoryDispatcher<A> {
 
 #[async_trait::async_trait]
 impl<A: Aggregate> Dispatcher<A> for InMemoryDispatcher<A> {
-    #[instrument(skip(self, events, _context), fields(aggregate_type = A::TYPE, aggregate_id = %aggregate_id, event_count = events.len()))]
     async fn dispatch(
         &self,
         aggregate_id: &str,

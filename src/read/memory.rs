@@ -40,7 +40,7 @@ where
     }
 
     /// Updates a view with an event.
-    #[instrument(skip(self, event), fields(view_type = V::TYPE, view_id = %V::view_id(event)))]
+
     pub fn update_view(&self, event: &EventEnvelope<A>) -> Result<(), AggregateError> {
         debug!("Updating view with event");
 

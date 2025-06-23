@@ -33,7 +33,6 @@ where
     A: Aggregate,
     P: EventStoreStorage<A>,
 {
-    #[instrument(skip(self), fields(aggregate_type = A::TYPE, aggregate_id = %aggregate_id))]
     async fn load_snapshot(
         &self,
         aggregate_id: &str,
@@ -55,7 +54,6 @@ where
         }
     }
 
-    #[instrument(skip(self), fields(aggregate_type = A::TYPE, aggregate_id = %aggregate_id, version = %version))]
     async fn load_events_from_version(
         &self,
         aggregate_id: &str,
@@ -78,7 +76,6 @@ where
         }
     }
 
-    #[instrument(skip(self), fields(aggregate_type = A::TYPE, aggregate_id = %aggregate_id))]
     async fn load_events(
         &self,
         aggregate_id: &str,
@@ -96,7 +93,6 @@ where
         }
     }
 
-    #[instrument(skip(self, events, aggregate, metadata, context), fields(aggregate_type = A::TYPE, aggregate_id = %aggregate.aggregate_id(), version = %version, event_count = events.len()))]
     async fn commit(
         &self,
         events: Vec<A::Event>,

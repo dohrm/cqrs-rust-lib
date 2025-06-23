@@ -79,7 +79,6 @@ where
         self.dispatchers.push(dispatcher);
     }
 
-    #[instrument(skip(self, command, context), fields(aggregate_type = A::TYPE))]
     pub async fn execute_create(
         &self,
         command: A::CreateCommand,
@@ -96,7 +95,6 @@ where
         result
     }
 
-    #[instrument(skip(self, command, context), fields(aggregate_type = A::TYPE, aggregate_id = %aggregate_id))]
     pub async fn execute_update(
         &self,
         aggregate_id: &str,
@@ -114,7 +112,6 @@ where
         result
     }
 
-    #[instrument(skip(self, command, metadata, context), fields(aggregate_type = A::TYPE))]
     pub async fn execute_create_with_metadata(
         &self,
         command: A::CreateCommand,
@@ -171,7 +168,6 @@ where
         Ok(aggregate_id)
     }
 
-    #[instrument(skip(self, events, context), fields(aggregate_type = A::TYPE, aggregate_id = %aggregate_id, event_count = events.len()))]
     async fn handle_events(
         &self,
         aggregate_id: &str,
@@ -193,7 +189,6 @@ where
         debug!("Finished handling events for all dispatchers");
     }
 
-    #[instrument(skip(self, command, metadata, context), fields(aggregate_type = A::TYPE, aggregate_id = %aggregate_id))]
     pub async fn execute_update_with_metadata(
         &self,
         aggregate_id: &str,
@@ -271,7 +266,6 @@ where
         Ok(())
     }
 
-    #[instrument(skip(self, aggregate, events, metadata, context), fields(aggregate_type = A::TYPE, aggregate_id = %aggregate_id, version = %version, event_count = events.len()))]
     async fn process(
         &self,
         aggregate_id: &str,
@@ -352,7 +346,7 @@ mod tests {
 
         let context = CqrsContext::default();
 
-        // Execution 
+        // Execution
         let aggregate_id = engine
             .execute_create(
                 CreateCommand::Initialize {
@@ -364,10 +358,7 @@ mod tests {
             .expect("Creation should succeed");
 
         // Verification
-        assert!(
-            !aggregate_id.is_empty(),
-            "Aggregate ID should not be empty"
-        );
+        assert!(!aggregate_id.is_empty(), "Aggregate ID should not be empty");
     }
 
     #[tokio::test]
@@ -422,7 +413,7 @@ mod tests {
 
         let context = CqrsContext::default();
 
-        // Create the aggregate 
+        // Create the aggregate
         let aggregate_id = engine
             .execute_create(
                 CreateCommand::Initialize {
