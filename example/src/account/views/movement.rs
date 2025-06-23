@@ -9,9 +9,19 @@ use utoipa::{IntoParams, ToSchema};
 pub struct Movement {
     pub id: String,
     pub account_id: String,
-    pub owner: String,
     pub amount: Amount,
     pub date: DateTime<Utc>,
+}
+
+impl From<&EventEnvelope<Account>> for Movement {
+    fn from(value: &EventEnvelope<Account>) -> Self {
+        Self {
+            id: Self::view_id(value),
+            account_id: value.aggregate_id.to_string(),
+            date: value.at,
+            ..Default::default()
+        }
+    }
 }
 
 impl HasId for Movement {
@@ -42,13 +52,17 @@ impl View<Account> for Movement {
 
     fn update(&self, event: &EventEnvelope<Account>) -> Option<Self> {
         match &event.payload {
-            Events::AccountCreated { owner } => Some(Movement {
-                id: Self::view_id(event),
-                account_id: event.aggregate_id.clone(),
-                owner: owner.clone(),
-                amount: Amount::default(),
-                date: event.at,
-            }),
+            Events::AccountCreated { .. } => Some(event.into()),
+            Events::Withdrawn { amount } => {
+                let mut res: Movement = event.into();
+                res.amount = amount.clone() * -1f64;
+                Some(res)
+            }
+            Events::Deposited { amount } => {
+                let mut res: Movement = event.into();
+                res.amount = amount.clone();
+                Some(res)
+            }
             _ => None,
         }
     }

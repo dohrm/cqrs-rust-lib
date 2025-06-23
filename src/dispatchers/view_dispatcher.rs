@@ -44,8 +44,9 @@ where
                 .find_by_id(Some(aggregate_id.to_string()), &view_id, context.clone())
                 .await?
                 .unwrap_or_else(|| V::default());
-            prev.update(event);
-            self.storage.save(prev, context.clone()).await?;
+            if let Some(next) = prev.update(event) {
+                self.storage.save(next, context.clone()).await?;
+            }
         }
         Ok(())
     }

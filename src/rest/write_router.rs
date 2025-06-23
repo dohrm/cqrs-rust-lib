@@ -8,12 +8,21 @@ use axum::response::IntoResponse;
 use axum::routing::{post, put};
 use axum::{Extension, Json};
 use http::StatusCode;
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use utoipa::openapi::{HttpMethod, Ref, RefOr};
 use utoipa::{PartialSchema, ToSchema};
 use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouter};
+
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
+pub struct CreationResult {
+    pub id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
+pub struct UpdateResult;
 
 #[derive(Clone)]
 pub struct CQRSWriteRouter<A, ES>
@@ -47,26 +56,27 @@ where
         let create_command_name = A::CreateCommand::name().to_string();
         let update_command_name = A::UpdateCommand::name().to_string();
 
-        let result_schema_ref = RefOr::Ref(Ref::from_schema_name(&aggregate_name));
-
         for SchemaData {
             name,
             schema,
             discriminator,
         } in helpers::read_schema(&A::CreateCommand::name(), A::CreateCommand::schema())
         {
+            let result_name = format!("{aggregate_name}_{create_command_name}_{name}_Result");
             let schema_name = format!("{aggregate_name}_{create_command_name}_{name}");
 
             let mut schemas = base_schema.clone();
+            schemas.push((result_name.clone(), CreationResult::schema()));
             schemas.push((schema_name.clone(), RefOr::T(schema.clone())));
             A::CreateCommand::schemas(&mut schemas);
             A::schemas(&mut schemas);
+            CreationResult::schemas(&mut schemas);
 
             let paths = helpers::generate_route(
                 A::TYPE,
                 HttpMethod::Post,
                 format!("/commands/{}", helpers::sanitize_schema_name(&name)).as_str(),
-                result_schema_ref.clone(),
+                RefOr::Ref(Ref::from_schema_name(&result_name)),
                 vec![],
                 vec![],
                 Some(RefOr::Ref(Ref::from_schema_name(&schema_name))),
@@ -92,18 +102,27 @@ where
             discriminator,
         } in helpers::read_schema(&A::UpdateCommand::name(), A::UpdateCommand::schema())
         {
+            let result_name = format!("{aggregate_name}_{update_command_name}_{name}_Result");
             let schema_name = format!("{aggregate_name}_{update_command_name}_{name}");
 
             let mut schemas = base_schema.clone();
+            schemas.push((result_name.clone(), UpdateResult::schema()));
             schemas.push((schema_name.clone(), RefOr::T(schema.clone())));
             A::UpdateCommand::schemas(&mut schemas);
+            UpdateResult::schemas(&mut schemas);
 
+            let id_path = format!("{}_id", A::TYPE);
             let paths = helpers::generate_route(
                 A::TYPE,
                 HttpMethod::Put,
-                format!("/{{id}}/commands/{}", helpers::sanitize_schema_name(&name)).as_str(),
-                result_schema_ref.clone(),
-                vec![("id".to_string(), String::schema())],
+                format!(
+                    "/{{{}}}/commands/{}",
+                    id_path,
+                    helpers::sanitize_schema_name(&name)
+                )
+                .as_str(),
+                RefOr::Ref(Ref::from_schema_name(&result_name)),
+                vec![(id_path, String::schema())],
                 vec![],
                 Some(RefOr::Ref(Ref::from_schema_name(&schema_name))),
             );
@@ -146,7 +165,9 @@ where
                 .execute_create_with_metadata(cmd, Self::metadata(&context), &context)
                 .await
             {
-                Ok(result) => (StatusCode::CREATED, Json(json ! ({"id": result}))).into_response(),
+                Ok(result) => {
+                    (StatusCode::CREATED, Json(CreationResult { id: result })).into_response()
+                }
                 Err(err) => helpers::aggregate_error_to_json(err).into_response(),
             },
             Err(err) => {
@@ -170,7 +191,7 @@ where
                 .execute_update_with_metadata(&id, cmd, Self::metadata(&context), &context)
                 .await
             {
-                Ok(_) => StatusCode::NO_CONTENT.into_response(),
+                Ok(_) => (StatusCode::OK, Json(UpdateResult)).into_response(),
                 Err(err) => helpers::aggregate_error_to_json(err).into_response(),
             },
             Err(err) => {

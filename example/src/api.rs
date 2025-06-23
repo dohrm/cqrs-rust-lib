@@ -105,15 +105,20 @@ pub async fn start(config: AppConfig) -> Result<(), Box<dyn std::error::Error + 
     info!("Starting server on  http://localhost:{}", config.http_port);
     // Initialize Dependency Injection.
     let database = mongo_database(&config.mongo_uri).await?;
-    // Views
-    let snapshot_account_repository =
-        MongoDbStorage::<Snapshot<Account>, AccountQuery, QueryBuilderAccount>::new(
-            database.clone(),
-            "accounts",
-            QueryBuilderAccount,
-            "accounts_snapshot",
-        );
-    let account_repository = MongoDBFromSnapshotStorage::new(Arc::new(snapshot_account_repository));
+    // Storages
+    let account_es_store = MongoDBPersist::<Account>::new(database.clone());
+
+    let account_repository = MongoDBFromSnapshotStorage::new(Arc::new(MongoDbStorage::<
+        Snapshot<Account>,
+        AccountQuery,
+        QueryBuilderAccount,
+    >::new(
+        database.clone(),
+        "accounts",
+        QueryBuilderAccount,
+        account_es_store.snapshot_collection_name(),
+    )));
+
     let movement_repository = MongoDbStorage::<Movement, MovementQuery, QueryBuilderMovement>::new(
         database.clone(),
         "movements",
@@ -123,8 +128,7 @@ pub async fn start(config: AppConfig) -> Result<(), Box<dyn std::error::Error + 
     let movement_dispatcher = ViewDispatcher::new(movement_repository.clone());
 
     // CQRS Command
-    let accounts_event_store =
-        EventStoreImpl::new(MongoDBPersist::<Account>::new(database.clone()));
+    let accounts_event_store = EventStoreImpl::new(account_es_store);
     let accounts_effects: Vec<Box<dyn Dispatcher<Account>>> = vec![Box::new(movement_dispatcher)];
     let accounts_engine = CqrsCommandEngine::new(
         accounts_event_store,

@@ -35,6 +35,13 @@ where
         }
     }
 
+    pub fn snapshot_collection_name(&self) -> &str {
+        self.snapshot_collection_name.as_str()
+    }
+    pub fn journal_collection_name(&self) -> &str {
+        self.journal_collection_name.as_str()
+    }
+
     fn snapshot_collection(
         &self,
         session: Option<&ClientSession>,

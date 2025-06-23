@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::ops::{AddAssign, SubAssign};
+use std::ops::{AddAssign, Mul, SubAssign};
 use utoipa::ToSchema;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -16,6 +16,16 @@ impl Amount {
     pub fn abs(&self) -> Self {
         Self {
             value: self.value.abs(),
+            currency: self.currency.clone(),
+        }
+    }
+}
+
+impl Mul<f64> for Amount {
+    type Output = Self;
+    fn mul(self, rhs: f64) -> Self::Output {
+        Self {
+            value: self.value * rhs,
             currency: self.currency.clone(),
         }
     }

@@ -8,10 +8,6 @@ pub struct QueryBuilderMovement;
 
 impl QueryBuilder<MovementQuery> for QueryBuilderMovement {
     fn to_query(&self, _query: &MovementQuery, _context: &CqrsContext) -> Document {
-        
-        // if let Some(owner) = &query.owner {
-        //     doc.insert("owner", owner);
-        // }
         Document::new()
     }
 
