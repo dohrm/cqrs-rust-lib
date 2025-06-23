@@ -2,7 +2,7 @@ use crate::{Aggregate, AggregateError, EventEnvelope, Snapshot};
 use std::fmt::Debug;
 
 #[async_trait::async_trait]
-pub trait Persist<A>: Clone + Debug + Send + Sync
+pub trait EventStoreStorage<A>: Clone + Debug + Send + Sync
 where
     A: Aggregate,
 {

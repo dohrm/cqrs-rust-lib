@@ -259,6 +259,7 @@ dependencies = [
  "ahash",
  "base64 0.22.1",
  "bitvec",
+ "chrono",
  "getrandom 0.2.16",
  "getrandom 0.3.3",
  "hex",
@@ -408,6 +409,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
+ "bson",
  "chrono",
  "futures",
  "http",
@@ -417,6 +419,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.12",
  "tokio",
+ "tracing",
  "utoipa",
  "utoipa-axum",
  "uuid",

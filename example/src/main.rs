@@ -47,6 +47,7 @@ fn init_tracing(log_level: Level) {
     let crate_name = env!("CARGO_CRATE_NAME");
     let filter = EnvFilter::from_default_env()
         .add_directive("info".parse().unwrap())
+        .add_directive("cqrs_rust_lib=debug".parse().unwrap())
         .add_directive(std::format!("{crate_name}={}", log_level).parse().unwrap());
     let l = layer::<Registry>();
     let registry = tracing_subscriber::registry();

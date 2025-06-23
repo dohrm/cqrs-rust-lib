@@ -121,6 +121,10 @@ async fn setup_mongodb() {
 cargo run -p example -- start --mongo-uri=mongodb://localhost:27017/test-lib --http-port=8989 --log-level=debug
 ```
 
+```shell
+cargo watch -x "run -p example -- start --http-port=8989 --mongo-uri=mongodb://localhost:27017/test-lib --log-level=debug"
+```
+
 ## License
 
 This project is licensed under the terms found in the [LICENSE](LICENSE) file.

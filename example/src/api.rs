@@ -1,21 +1,27 @@
-use crate::account::Account;
+use crate::account::views::{Movement, MovementQuery};
+use crate::account::{Account, AccountQuery};
+use crate::query_builder_account::QueryBuilderAccount;
+use crate::query_builder_movement::QueryBuilderMovement;
 use axum::body::Body;
 use axum::extract::Request;
 use axum::middleware::Next;
 use axum::response::{Redirect, Response};
 use axum::routing::get;
 use axum::{middleware, Json, Router};
+use cqrs_rust_lib::dispatchers::ViewDispatcher;
 use cqrs_rust_lib::es::mongodb::MongoDBPersist;
 use cqrs_rust_lib::es::EventStoreImpl;
-use cqrs_rust_lib::rest::CQRSWriteRouter;
-use cqrs_rust_lib::{CqrsCommandEngine, CqrsContext};
+use cqrs_rust_lib::read::mongodb::{MongoDBFromSnapshotStorage, MongoDbStorage};
+use cqrs_rust_lib::rest::{CQRSReadRouter, CQRSWriteRouter};
+use cqrs_rust_lib::{Aggregate, CqrsCommandEngine, CqrsContext, Dispatcher, Snapshot};
 use http::header::CONTENT_TYPE;
 use http::StatusCode;
 use mongodb::options::ClientOptions;
+use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace;
 use tower_http::trace::TraceLayer;
-use tracing::{info, Level};
+use tracing::{error, info, Level};
 use utoipa::OpenApi;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_swagger_ui::SwaggerUi;
@@ -99,11 +105,39 @@ pub async fn start(config: AppConfig) -> Result<(), Box<dyn std::error::Error + 
     info!("Starting server on  http://localhost:{}", config.http_port);
     // Initialize Dependency Injection.
     let database = mongo_database(&config.mongo_uri).await?;
-    let accounts_event_store = EventStoreImpl::new(MongoDBPersist::<Account>::new(database));
-    let accounts_effects = vec![];
-    let accounts_engine = CqrsCommandEngine::new(accounts_event_store, accounts_effects, ());
+    // Views
+    let snapshot_account_repository =
+        MongoDbStorage::<Snapshot<Account>, AccountQuery, QueryBuilderAccount>::new(
+            database.clone(),
+            "accounts",
+            QueryBuilderAccount,
+            "accounts_snapshot",
+        );
+    let account_repository = MongoDBFromSnapshotStorage::new(Arc::new(snapshot_account_repository));
+    let movement_repository = MongoDbStorage::<Movement, MovementQuery, QueryBuilderMovement>::new(
+        database.clone(),
+        "movements",
+        QueryBuilderMovement,
+        "movements_view",
+    );
+    let movement_dispatcher = ViewDispatcher::new(movement_repository.clone());
+
+    // CQRS Command
+    let accounts_event_store =
+        EventStoreImpl::new(MongoDBPersist::<Account>::new(database.clone()));
+    let accounts_effects: Vec<Box<dyn Dispatcher<Account>>> = vec![Box::new(movement_dispatcher)];
+    let accounts_engine = CqrsCommandEngine::new(
+        accounts_event_store,
+        accounts_effects,
+        (),
+        Box::new(|e| {
+            error!("something went wrong: {}", e);
+        }),
+    );
 
     // Initialize routers
+    let accounts_read_router = CQRSReadRouter::routes(account_repository, Account::TYPE);
+    let movements_read_router = CQRSReadRouter::routes(movement_repository, Account::TYPE);
     let accounts_write_router = CQRSWriteRouter::routes(accounts_engine);
 
     // Prepare router
@@ -114,6 +148,8 @@ pub async fn start(config: AppConfig) -> Result<(), Box<dyn std::error::Error + 
                 .on_response(trace::DefaultOnResponse::new().level(Level::INFO)),
         )
         // .routes(routes!(health))
+        .nest(ACCOUNTS_PATH, accounts_read_router)
+        .nest(ACCOUNTS_PATH, movements_read_router)
         .nest(ACCOUNTS_PATH, accounts_write_router)
         .split_for_parts();
 

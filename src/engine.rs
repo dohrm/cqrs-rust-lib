@@ -2,7 +2,7 @@ use crate::context::CqrsContext;
 use crate::denormalizer::Dispatcher;
 use crate::errors::AggregateError;
 use crate::event_store::EventStore;
-use crate::Aggregate;
+use crate::{Aggregate, EventEnvelope};
 use std::collections::HashMap;
 
 /// The `CqrsCommandEngine` struct is a Command Query Responsibility Segregation (CQRS) engine
@@ -12,7 +12,7 @@ use std::collections::HashMap;
 /// # Type Parameters
 /// - `A`: The type of the aggregate managed by this CQRS engine.
 ///   The aggregate represents the domain behavior and state transitions.
-/// - `ES`: The type of the event store used to persist events related to the aggregate.
+/// - `ES`: The type of the event store used to views events related to the aggregate.
 ///
 /// # Bounds
 /// - `A`: Must implement the `Aggregate` trait. This ensures the aggregate provides necessary
@@ -22,7 +22,7 @@ use std::collections::HashMap;
 ///
 /// # Fields
 /// - `store: ES`
-///   The event store instance used to persist and retrieve events associated with the aggregate.
+///   The event store instance used to views and retrieve events associated with the aggregate.
 ///   It allows the CQRS engine to save and load the aggregate's event stream to/from persistent storage.
 ///
 /// - `dispatchers: Vec<Box<dyn Dispatcher<A>>>`
@@ -50,6 +50,7 @@ where
     store: ES,
     dispatchers: Vec<Box<dyn Dispatcher<A>>>,
     services: A::Services,
+    error_handler: Box<dyn Fn(&AggregateError) + Send + Sync>,
 }
 
 impl<A, ES> CqrsCommandEngine<A, ES>
@@ -58,11 +59,17 @@ where
     ES: EventStore<A>,
 {
     #[must_use]
-    pub fn new(store: ES, dispatchers: Vec<Box<dyn Dispatcher<A>>>, services: A::Services) -> Self {
+    pub fn new(
+        store: ES,
+        dispatchers: Vec<Box<dyn Dispatcher<A>>>,
+        services: A::Services,
+        error_handler: Box<dyn Fn(&AggregateError) + Send + Sync>,
+    ) -> Self {
         Self {
             store,
             dispatchers,
             services,
+            error_handler,
         }
     }
 
@@ -106,6 +113,21 @@ where
         Ok(aggregate_id)
     }
 
+    async fn handle_events(
+        &self,
+        aggregate_id: &str,
+        events: &[EventEnvelope<A>],
+        context: &CqrsContext,
+    ) {
+        let eh = &self.error_handler;
+        for dispatcher in &self.dispatchers {
+            match dispatcher.dispatch(aggregate_id, events, context).await {
+                Ok(_) => {}
+                Err(e) => eh(&e),
+            };
+        }
+    }
+
     pub async fn execute_update_with_metadata(
         &self,
         aggregate_id: &str,
@@ -133,10 +155,8 @@ where
         if committed_events.is_empty() {
             return Ok(());
         }
-        for dispatcher in &self.dispatchers {
-            let events_to_dispatch = committed_events.as_slice();
-            dispatcher.dispatch(aggregate_id, events_to_dispatch).await;
-        }
+        self.handle_events(aggregate_id, &committed_events, context)
+            .await;
         Ok(())
     }
 
@@ -163,10 +183,8 @@ where
         if committed_events.is_empty() {
             return Ok(());
         }
-        for dispatcher in &self.dispatchers {
-            let events_to_dispatch = committed_events.as_slice();
-            dispatcher.dispatch(aggregate_id, events_to_dispatch).await;
-        }
+        self.handle_events(aggregate_id, &committed_events, context)
+            .await;
         Ok(())
     }
 }
@@ -278,7 +296,7 @@ mod tests {
         // Préparation
         let persist = InMemoryPersist::<TestAggregate>::new();
         let store = EventStoreImpl::new(persist);
-        let engine = CqrsCommandEngine::new(store, vec![], ());
+        let engine = CqrsCommandEngine::new(store, vec![], (), Box::new(|_e| {}));
 
         let context = CqrsContext::default();
 
@@ -300,7 +318,7 @@ mod tests {
         // Préparation
         let persist = InMemoryPersist::<TestAggregate>::new();
         let store = EventStoreImpl::new(persist);
-        let engine = CqrsCommandEngine::new(store, vec![], ());
+        let engine = CqrsCommandEngine::new(store, vec![], (), Box::new(|_e| {}));
 
         let context = CqrsContext::default();
 
@@ -333,7 +351,7 @@ mod tests {
         // Préparation
         let persist = InMemoryPersist::<TestAggregate>::new();
         let store = EventStoreImpl::new(persist);
-        let engine = CqrsCommandEngine::new(store, vec![], ());
+        let engine = CqrsCommandEngine::new(store, vec![], (), Box::new(|_e| {}));
 
         let context = CqrsContext::default();
 

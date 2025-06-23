@@ -1,16 +1,17 @@
+use crate::account::Amount;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "type")]
 pub enum CreateCommands {
-    Create,
+    Create { owner: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "type")]
 pub enum UpdateCommands {
-    Deposit { amount: f64 },
-    Withdraw { amount: f64 },
+    Deposit { amount: Amount },
+    Withdraw { amount: Amount },
     Close,
 }

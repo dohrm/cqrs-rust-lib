@@ -1,19 +1,23 @@
+use crate::account::amount::Amount;
 use crate::account::{CreateCommands, Events, UpdateCommands};
-use cqrs_rust_lib::{Aggregate, CqrsContext};
+use cqrs_rust_lib::{Aggregate, CqrsContext, EventEnvelope, View};
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::io::ErrorKind;
 use utoipa::ToSchema;
 
+const AGGREGATE_TYPE: &'static str = "account";
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 pub struct Account {
     pub id: String,
-    pub amount: f64,
+    pub owner: String,
+    pub amount: Amount,
 }
 
 #[async_trait::async_trait]
 impl Aggregate for Account {
-    const TYPE: &'static str = "accounts";
+    const TYPE: &'static str = AGGREGATE_TYPE;
 
     type CreateCommand = CreateCommands;
     type UpdateCommand = UpdateCommands;
@@ -36,7 +40,7 @@ impl Aggregate for Account {
         _context: &CqrsContext,
     ) -> Result<Vec<Self::Event>, Self::Error> {
         match command {
-            CreateCommands::Create => Ok(vec![Self::Event::AccountCreated]),
+            CreateCommands::Create { owner } => Ok(vec![Self::Event::AccountCreated { owner }]),
         }
     }
 
@@ -48,7 +52,7 @@ impl Aggregate for Account {
     ) -> Result<Vec<Self::Event>, Self::Error> {
         match command {
             UpdateCommands::Deposit { amount } => {
-                if amount < 0f64 {
+                if amount.value < 0f64 {
                     Ok(vec![Self::Event::Withdrawn {
                         amount: amount.abs(),
                     }])
@@ -57,7 +61,7 @@ impl Aggregate for Account {
                 }
             }
             UpdateCommands::Withdraw { amount } => {
-                if amount < 0f64 {
+                if amount.value < 0f64 {
                     Ok(vec![Self::Event::Deposited {
                         amount: amount.abs(),
                     }])
@@ -71,7 +75,9 @@ impl Aggregate for Account {
 
     fn apply(&mut self, event: Self::Event) -> Result<(), Self::Error> {
         match event {
-            Events::AccountCreated => {}
+            Events::AccountCreated { owner } => {
+                self.owner = owner;
+            }
             Events::Deposited { amount } => {
                 self.amount += amount;
             }
@@ -85,5 +91,18 @@ impl Aggregate for Account {
 
     fn error(_status: StatusCode, details: &str) -> Self::Error {
         std::io::Error::new(ErrorKind::AddrInUse, details.to_string())
+    }
+}
+
+impl View<Account> for Account {
+    const TYPE: &'static str = AGGREGATE_TYPE;
+    const IS_CHILD_OF_AGGREGATE: bool = false;
+
+    fn view_id(event: &EventEnvelope<Account>) -> String {
+        event.aggregate_id.to_string()
+    }
+
+    fn update(&self, _event: &EventEnvelope<Account>) -> Option<Self> {
+        None
     }
 }

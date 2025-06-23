@@ -1,4 +1,4 @@
-use crate::es::persist::Persist;
+use crate::es::storage::EventStoreStorage;
 use crate::{Aggregate, AggregateError, EventEnvelope, Snapshot};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -25,7 +25,7 @@ where
 }
 
 #[async_trait::async_trait]
-impl<A> Persist<A> for InMemoryPersist<A>
+impl<A> EventStoreStorage<A> for InMemoryPersist<A>
 where
     A: Aggregate,
 {

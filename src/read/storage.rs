@@ -1,69 +1,46 @@
-use crate::read::paged::Paged;
-use crate::read::sorter::Sorter;
-use crate::{Aggregate, AggregateError, CqrsContext, View};
+use crate::read::Paged;
+use crate::{AggregateError, CqrsContext};
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 use std::fmt::Debug;
-#[cfg(feature = "utoipa")]
-use utoipa::{PartialSchema, ToSchema};
+
+#[derive(Debug, thiserror::Error)]
+pub enum StorageError {
+    #[error("Missing parent id")]
+    MissingParentId,
+    #[error("Invalid parent id")]
+    InvalidParentId,
+    #[error("Unsupported method : {0}")]
+    UnsupportedMethod(String),
+}
+
+pub trait HasId {
+    fn field_id() -> &'static str;
+    fn id(&self) -> &str;
+    fn parent_field_id() -> Option<&'static str>;
+    fn parent_id(&self) -> Option<&str>;
+}
 
 #[async_trait::async_trait]
-pub trait Storage<A>: Clone + Debug + Send + Sync
+pub trait Storage<V, Q>: Clone + Debug + Send + Sync
 where
-    A: Aggregate,
+    V: Debug + Clone + Default + Serialize + DeserializeOwned + Send + Sync,
+    Q: Clone + Debug + DeserializeOwned + Send + Sync,
 {
-    const TYPE: &'static str;
-    #[cfg(feature = "utoipa")]
-    type View: View<A> + ToSchema;
-    #[cfg(not(feature = "utoipa"))]
-    type View: View<A>;
-
-    #[cfg(feature = "utoipa")]
-    type Query: Clone + Debug + DeserializeOwned + Send + Sync + ToSchema;
-
-    #[cfg(not(feature = "utoipa"))]
-    type Query: Clone + Debug + DeserializeOwned + Send + Sync;
-
-    fn name(&self) -> &'static str {
-        Self::TYPE
-    }
-
-    #[cfg(feature = "utoipa")]
-    fn result_schema(&self) -> utoipa::openapi::RefOr<utoipa::openapi::Schema> {
-        Self::View::schema()
-    }
-
-    #[cfg(feature = "utoipa")]
-    fn paged_result_schema(&self) -> utoipa::openapi::RefOr<utoipa::openapi::Schema> {
-        Paged::<Self::View>::schema()
-    }
-
-    #[cfg(feature = "utoipa")]
-    fn query_schema(&self) -> utoipa::openapi::RefOr<utoipa::openapi::Schema> {
-        Self::Query::schema()
-    }
-
-    #[cfg(feature = "utoipa")]
-    fn schemas(
+    fn type_name(&self) -> &str;
+    async fn filter(
         &self,
-        schemas: &mut Vec<(String, utoipa::openapi::RefOr<utoipa::openapi::Schema>)>,
-    ) {
-        Paged::<Self::View>::schemas(schemas);
-        Self::View::schemas(schemas);
-        Self::Query::schemas(schemas);
-    }
-
-    fn filter(
-        &self,
-        query: Self::Query,
-        page_limit: Option<i64>,
-        page_size: Option<i64>,
-        sorts: Vec<Sorter>,
+        parent_id: Option<String>,
+        query: Q,
         context: CqrsContext,
-    ) -> Result<Paged<Self::View>, AggregateError>;
+    ) -> Result<Paged<V>, AggregateError>;
 
-    fn find_by_id(
+    async fn find_by_id(
         &self,
+        parent_id: Option<String>,
         id: &str,
         context: CqrsContext,
-    ) -> Result<Option<Self::View>, AggregateError>;
+    ) -> Result<Option<V>, AggregateError>;
+
+    async fn save(&self, entity: V, context: CqrsContext) -> Result<(), AggregateError>;
 }

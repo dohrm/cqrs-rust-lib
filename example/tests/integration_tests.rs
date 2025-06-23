@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod integration_tests {
-    use cqrs_rust_lib::es::persist::Persist;
+    use cqrs_rust_lib::es::storage::EventStoreStorage;
     use cqrs_rust_lib::es::EventStoreImpl;
     use cqrs_rust_lib::CqrsContext;
     use example::account::{Account, CreateCommands, UpdateCommands};
@@ -20,34 +20,64 @@ mod integration_tests {
 
     async fn testcases<P>(store: P)
     where
-        P: Persist<Account>,
+        P: EventStoreStorage<Account>,
     {
         let event_store = EventStoreImpl::new(store);
-        let engine = cqrs_rust_lib::CqrsCommandEngine::new(event_store, vec![], ());
+        let engine =
+            cqrs_rust_lib::CqrsCommandEngine::new(event_store, vec![], (), Box::new(|_e| {}));
         let context = CqrsContext::default();
 
         let value = engine
-            .execute_create(CreateCommands::Create, &context)
+            .execute_create(
+                CreateCommands::Create {
+                    owner: "bob".into(),
+                },
+                &context,
+            )
             .await;
         assert!(value.is_ok());
         let uuid = value.unwrap();
 
         let value = engine
-            .execute_update(&uuid, UpdateCommands::Deposit { amount: 50f64 }, &context)
+            .execute_update(
+                &uuid,
+                UpdateCommands::Deposit {
+                    amount: 50f64.into(),
+                },
+                &context,
+            )
             .await;
         println!("{:?}", value);
         assert!(value.is_ok());
 
         let value = engine
-            .execute_update(&uuid, UpdateCommands::Deposit { amount: 50f64 }, &context)
+            .execute_update(
+                &uuid,
+                UpdateCommands::Deposit {
+                    amount: 50f64.into(),
+                },
+                &context,
+            )
             .await;
         assert!(value.is_ok());
         let value = engine
-            .execute_update(&uuid, UpdateCommands::Deposit { amount: 50f64 }, &context)
+            .execute_update(
+                &uuid,
+                UpdateCommands::Deposit {
+                    amount: 50f64.into(),
+                },
+                &context,
+            )
             .await;
         assert!(value.is_ok());
         let value = engine
-            .execute_update(&uuid, UpdateCommands::Deposit { amount: 50f64 }, &context)
+            .execute_update(
+                &uuid,
+                UpdateCommands::Deposit {
+                    amount: 50f64.into(),
+                },
+                &context,
+            )
             .await;
         assert!(value.is_ok());
     }

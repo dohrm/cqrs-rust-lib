@@ -1,4 +1,4 @@
-use crate::es::persist::Persist;
+use crate::es::storage::EventStoreStorage;
 use crate::{Aggregate, AggregateError, CqrsContext, EventEnvelope, EventStore, Snapshot};
 use std::collections::HashMap;
 
@@ -6,7 +6,7 @@ use std::collections::HashMap;
 pub struct EventStoreImpl<A, P>
 where
     A: Aggregate,
-    P: Persist<A>,
+    P: EventStoreStorage<A>,
 {
     _phantom: std::marker::PhantomData<(A, P)>,
     persist: P,
@@ -15,7 +15,7 @@ where
 impl<A, P> EventStoreImpl<A, P>
 where
     A: Aggregate,
-    P: Persist<A>,
+    P: EventStoreStorage<A>,
 {
     #[must_use]
     pub fn new(persist: P) -> Self {
@@ -30,7 +30,7 @@ where
 impl<A, P> EventStore<A> for EventStoreImpl<A, P>
 where
     A: Aggregate,
-    P: Persist<A>,
+    P: EventStoreStorage<A>,
 {
     async fn load_snapshot(
         &self,
