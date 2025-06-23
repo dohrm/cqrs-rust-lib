@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::io::ErrorKind;
 use utoipa::ToSchema;
 
-const AGGREGATE_TYPE: &'static str = "account";
+const AGGREGATE_TYPE: &str = "account";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, ToSchema)]
 pub struct Account {

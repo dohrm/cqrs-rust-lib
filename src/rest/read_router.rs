@@ -71,8 +71,7 @@ where
     ) -> OpenApiRouter<CQRSReadRouter<A, V, S, Q>> {
         let path = Self::base_path();
         let response_schema_name = format!("{}_{}", Paged::<V>::name(), V::name());
-        let mut schemas = vec![];
-        schemas.push((response_schema_name.to_string(), Paged::<V>::schema()));
+        let schemas = vec![(response_schema_name.to_string(), Paged::<V>::schema())];
 
         let paths = helpers::generate_route(
             tag,
@@ -116,8 +115,7 @@ where
     ) -> OpenApiRouter<CQRSReadRouter<A, V, S, Q>> {
         let path = Self::base_path();
         let response_schema_name = V::name();
-        let mut schemas = vec![];
-        schemas.push((response_schema_name.to_string(), V::schema()));
+        let schemas = vec![(response_schema_name.to_string(), V::schema())];
 
         let mut path_parameters = Self::base_path_parameters();
         path_parameters.push((Self::path_id_field(), String::schema()));

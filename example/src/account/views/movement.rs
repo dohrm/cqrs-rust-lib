@@ -47,7 +47,7 @@ impl View<Account> for Movement {
                 account_id: event.aggregate_id.clone(),
                 owner: owner.clone(),
                 amount: Amount::default(),
-                date: event.at.clone(),
+                date: event.at,
             }),
             _ => None,
         }

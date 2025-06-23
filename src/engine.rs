@@ -5,7 +5,7 @@ use crate::event::Event;
 use crate::event_store::EventStore;
 use crate::{Aggregate, EventEnvelope};
 use std::collections::HashMap;
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info};
 
 /// The `CqrsCommandEngine` struct is a Command Query Responsibility Segregation (CQRS) engine
 /// designed to handle commands and communication with an underlying event store and various dispatchers.

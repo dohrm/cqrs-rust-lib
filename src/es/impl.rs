@@ -1,7 +1,7 @@
 use crate::es::storage::EventStoreStorage;
 use crate::{Aggregate, AggregateError, CqrsContext, EventEnvelope, EventStore, Snapshot};
 use std::collections::HashMap;
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info};
 
 #[derive(Debug, Clone)]
 pub struct EventStoreImpl<A, P>

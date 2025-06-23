@@ -57,7 +57,7 @@ where
         collection_name: &str,
     ) -> Self {
         Self {
-            _phantom: PhantomData::default(),
+            _phantom: PhantomData,
             database,
             type_name: type_name.to_string(),
             collection_name: collection_name.to_string(),
@@ -178,7 +178,7 @@ where
     #[must_use]
     pub fn new(inner: Arc<MongoDbStorage<Snapshot<A>, Q, QB>>) -> Self {
         Self {
-            _phantom: PhantomData::default(),
+            _phantom: PhantomData,
             inner,
         }
     }

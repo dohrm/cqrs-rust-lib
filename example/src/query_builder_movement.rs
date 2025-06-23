@@ -8,11 +8,11 @@ pub struct QueryBuilderMovement;
 
 impl QueryBuilder<MovementQuery> for QueryBuilderMovement {
     fn to_query(&self, _query: &MovementQuery, _context: &CqrsContext) -> Document {
-        let doc = Document::new();
+        
         // if let Some(owner) = &query.owner {
         //     doc.insert("owner", owner);
         // }
-        doc
+        Document::new()
     }
 
     fn to_skip_limit(&self, query: &MovementQuery, _context: &CqrsContext) -> SkipLimit {

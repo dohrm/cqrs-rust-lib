@@ -1,7 +1,7 @@
 use crate::{Aggregate, AggregateError, EventEnvelope, View};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tracing::{debug, instrument};
+use tracing::debug;
 
 /// A simple in-memory view store that can be used for testing or simple applications.
 pub struct InMemoryViewStore<A, V>
@@ -40,14 +40,13 @@ where
     }
 
     /// Updates a view with an event.
-
     pub fn update_view(&self, event: &EventEnvelope<A>) -> Result<(), AggregateError> {
         debug!("Updating view with event");
 
         let view_id = V::view_id(event);
         let mut views = self.views.lock().unwrap();
 
-        let view = views.entry(view_id.clone()).or_insert_with(V::default);
+        let view = views.entry(view_id.clone()).or_default();
 
         if let Some(updated_view) = view.update(event) {
             debug!(view_id = %view_id, "View updated successfully");

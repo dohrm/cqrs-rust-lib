@@ -1,7 +1,7 @@
 use crate::{Aggregate, AggregateError, CqrsContext, Dispatcher, EventEnvelope};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tracing::{debug, info, instrument};
+use tracing::{debug, info};
 
 /// A simple in-memory dispatcher that stores events in memory.
 /// Useful for testing or simple applications.
