@@ -1,5 +1,5 @@
 use crate::errors::AggregateError;
-use crate::es::persist::Persist;
+use crate::es::storage::EventStoreStorage;
 use crate::snapshot::Snapshot;
 use crate::{Aggregate, EventEnvelope};
 use futures::TryStreamExt;
@@ -35,6 +35,13 @@ where
         }
     }
 
+    pub fn snapshot_collection_name(&self) -> &str {
+        self.snapshot_collection_name.as_str()
+    }
+    pub fn journal_collection_name(&self) -> &str {
+        self.journal_collection_name.as_str()
+    }
+
     fn snapshot_collection(
         &self,
         session: Option<&ClientSession>,
@@ -66,7 +73,7 @@ where
 }
 
 #[async_trait::async_trait]
-impl<A> Persist<A> for MongoDBPersist<A>
+impl<A> EventStoreStorage<A> for MongoDBPersist<A>
 where
     A: Aggregate,
 {

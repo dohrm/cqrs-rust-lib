@@ -15,10 +15,17 @@ mod event_store;
 pub use event_store::*;
 
 pub mod es;
+pub mod read;
+
 #[cfg(feature = "utoipa")]
 pub mod rest;
 
 mod context;
 pub use context::*;
 mod snapshot;
+
 pub use snapshot::*;
+pub mod dispatchers;
+
+#[cfg(test)]
+pub mod testing;

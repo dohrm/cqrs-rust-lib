@@ -7,8 +7,8 @@ A comprehensive Command Query Responsibility Segregation (CQRS) and Event Sourci
 - **CQRS Pattern Implementation**: Separate command and query responsibilities
 - **Event Sourcing**: Store state changes as a sequence of events
 - **Multiple Storage Options**:
-  - In-memory storage for testing and development
-  - MongoDB persistence for production use
+    - In-memory storage for testing and development
+    - MongoDB persistence for production use
 - **Aggregate Pattern**: Define domain entities with encapsulated business logic
 - **Async Support**: Built with async/await for non-blocking operations
 - **REST API Integration**: Optional REST API integration with Axum
@@ -62,17 +62,17 @@ async fn main() {
     // Create an in-memory event store
     let store = InMemoryPersist::<Account>::new();
     let event_store = EventStoreImpl::new(store);
-    
+
     // Create the CQRS engine
     let engine = CqrsCommandEngine::new(event_store, vec![], ());
     let context = CqrsContext::default();
-    
+
     // Execute commands
     let account_id = engine
         .execute_create(CreateAccountCommand::Create, &context)
         .await
         .expect("Failed to create account");
-        
+
     engine
         .execute_update(&account_id, DepositCommand { amount: 100.0 }, &context)
         .await
@@ -91,10 +91,10 @@ async fn setup_mongodb() {
         .await
         .expect("Failed to connect to MongoDB");
     let database = client.database("my_app");
-    
+
     let store = MongoDBPersist::<Account>::new(database);
     let event_store = EventStoreImpl::new(store);
-    
+
     // Create the CQRS engine with MongoDB persistence
     let engine = CqrsCommandEngine::new(event_store, vec![], ());
 }
@@ -115,10 +115,21 @@ async fn setup_mongodb() {
 - **InMemoryPersist**: In-memory storage for testing
 - **MongoDBPersist**: MongoDB-based persistence
 
+## To run the example project:
+
+```shell
+cargo run -p example -- start --mongo-uri=mongodb://localhost:27017/test-lib --http-port=8989 --log-level=debug
+```
+
+```shell
+cargo watch -x "run -p example -- start --http-port=8989 --mongo-uri=mongodb://localhost:27017/test-lib --log-level=debug"
+```
+
 ## License
 
 This project is licensed under the terms found in the [LICENSE](LICENSE) file.
 
 ## Contributing
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details on how to contribute to this project.
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details on how to contribute to this
+project.

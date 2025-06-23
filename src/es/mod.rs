@@ -3,5 +3,5 @@ pub mod inmemory;
 #[cfg(feature = "mongodb")]
 pub mod mongodb;
 
-pub mod persist;
+pub mod storage;
 pub use r#impl::*;

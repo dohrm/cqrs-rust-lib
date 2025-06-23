@@ -9,10 +9,10 @@ pub struct CqrsContext {
 }
 
 impl CqrsContext {
-    pub fn new(current_user: Option<String>, request_id: String) -> Self {
+    pub fn new(current_user: Option<String>) -> Self {
         Self {
             current_user,
-            request_id,
+            request_id: "".to_string(),
             now: Utc::now(),
             rand_bytes: None,
         }
@@ -119,7 +119,7 @@ impl CqrsContext {
 
 impl Default for CqrsContext {
     fn default() -> Self {
-        Self::new(None, "".to_string())
+        Self::new(None)
     }
 }
 
