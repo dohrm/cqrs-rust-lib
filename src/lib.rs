@@ -26,3 +26,6 @@ mod snapshot;
 
 pub use snapshot::*;
 pub mod dispatchers;
+
+#[cfg(test)]
+pub mod testing;

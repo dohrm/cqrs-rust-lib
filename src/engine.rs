@@ -1,9 +1,11 @@
 use crate::context::CqrsContext;
 use crate::denormalizer::Dispatcher;
 use crate::errors::AggregateError;
+use crate::event::Event;
 use crate::event_store::EventStore;
 use crate::{Aggregate, EventEnvelope};
 use std::collections::HashMap;
+use tracing::{debug, error, info, instrument};
 
 /// The `CqrsCommandEngine` struct is a Command Query Responsibility Segregation (CQRS) engine
 /// designed to handle commands and communication with an underlying event store and various dispatchers.
@@ -77,57 +79,121 @@ where
         self.dispatchers.push(dispatcher);
     }
 
+    #[instrument(skip(self, command, context), fields(aggregate_type = A::TYPE))]
     pub async fn execute_create(
         &self,
         command: A::CreateCommand,
         context: &CqrsContext,
     ) -> Result<String, AggregateError> {
-        self.execute_create_with_metadata(command, HashMap::new(), context)
-            .await
+        debug!("Executing create command");
+        let result = self
+            .execute_create_with_metadata(command, HashMap::new(), context)
+            .await;
+        match &result {
+            Ok(id) => info!(aggregate_id = %id, "Aggregate created successfully"),
+            Err(e) => error!(error = %e, "Failed to create aggregate"),
+        }
+        result
     }
 
+    #[instrument(skip(self, command, context), fields(aggregate_type = A::TYPE, aggregate_id = %aggregate_id))]
     pub async fn execute_update(
         &self,
         aggregate_id: &str,
         command: A::UpdateCommand,
         context: &CqrsContext,
     ) -> Result<(), AggregateError> {
-        self.execute_update_with_metadata(aggregate_id, command, HashMap::new(), context)
-            .await
+        debug!("Executing update command");
+        let result = self
+            .execute_update_with_metadata(aggregate_id, command, HashMap::new(), context)
+            .await;
+        match &result {
+            Ok(_) => info!("Aggregate updated successfully"),
+            Err(e) => error!(error = %e, "Failed to update aggregate"),
+        }
+        result
     }
 
+    #[instrument(skip(self, command, metadata, context), fields(aggregate_type = A::TYPE))]
     pub async fn execute_create_with_metadata(
         &self,
         command: A::CreateCommand,
         metadata: HashMap<String, String>,
         context: &CqrsContext,
     ) -> Result<String, AggregateError> {
+        debug!("Executing create command with metadata");
         let aggregate_id = context.next_uuid();
-        let (aggregate, version) = self.store.initialize_aggregate(&aggregate_id).await?;
-        let events = aggregate
+        debug!(aggregate_id = %aggregate_id, "Generated new aggregate ID");
+
+        let (aggregate, version) = match self.store.initialize_aggregate(&aggregate_id).await {
+            Ok(result) => {
+                let (_, v) = &result;
+                debug!(version = %v, "Initialized aggregate");
+                result
+            }
+            Err(e) => {
+                error!(error = %e, "Failed to initialize aggregate");
+                return Err(e);
+            }
+        };
+
+        let events = match aggregate
             .handle_create(command, &self.services, context)
             .await
-            .map_err(|e| AggregateError::UserError(e.into()))?;
-        self.process(&aggregate_id, aggregate, version, events, metadata, context)
-            .await?;
+        {
+            Ok(events) => {
+                debug!(
+                    event_count = events.len(),
+                    "Generated events from create command"
+                );
+                events
+            }
+            Err(e) => {
+                error!(error = %e, "Failed to handle create command");
+                return Err(AggregateError::UserError(e.into()));
+            }
+        };
+
+        match self
+            .process(&aggregate_id, aggregate, version, events, metadata, context)
+            .await
+        {
+            Ok(_) => {
+                debug!("Processed events successfully");
+            }
+            Err(e) => {
+                error!(error = %e, "Failed to process events");
+                return Err(e);
+            }
+        }
+
+        info!(aggregate_id = %aggregate_id, "Aggregate created successfully with metadata");
         Ok(aggregate_id)
     }
 
+    #[instrument(skip(self, events, context), fields(aggregate_type = A::TYPE, aggregate_id = %aggregate_id, event_count = events.len()))]
     async fn handle_events(
         &self,
         aggregate_id: &str,
         events: &[EventEnvelope<A>],
         context: &CqrsContext,
     ) {
+        debug!("Handling events for dispatchers");
         let eh = &self.error_handler;
-        for dispatcher in &self.dispatchers {
+        for (i, dispatcher) in self.dispatchers.iter().enumerate() {
+            debug!(dispatcher_index = i, "Dispatching events to dispatcher");
             match dispatcher.dispatch(aggregate_id, events, context).await {
-                Ok(_) => {}
-                Err(e) => eh(&e),
+                Ok(_) => debug!(dispatcher_index = i, "Successfully dispatched events"),
+                Err(e) => {
+                    error!(dispatcher_index = i, error = %e, "Failed to dispatch events");
+                    eh(&e);
+                }
             };
         }
+        debug!("Finished handling events for all dispatchers");
     }
 
+    #[instrument(skip(self, command, metadata, context), fields(aggregate_type = A::TYPE, aggregate_id = %aggregate_id))]
     pub async fn execute_update_with_metadata(
         &self,
         aggregate_id: &str,
@@ -135,31 +201,77 @@ where
         metadata: HashMap<String, String>,
         context: &CqrsContext,
     ) -> Result<(), AggregateError> {
-        let (mut aggregate, version) = self.store.load_aggregate(aggregate_id).await?;
-        let events = aggregate
+        debug!("Executing update command with metadata");
+
+        let (mut aggregate, version) = match self.store.load_aggregate(aggregate_id).await {
+            Ok(result) => {
+                let (_, v) = &result;
+                debug!(version = %v, "Loaded aggregate");
+                result
+            }
+            Err(e) => {
+                error!(error = %e, "Failed to load aggregate");
+                return Err(e);
+            }
+        };
+
+        let events = match aggregate
             .handle_update(command, &self.services, context)
             .await
-            .map_err(|e| AggregateError::UserError(e.into()))?;
+        {
+            Ok(events) => {
+                debug!(
+                    event_count = events.len(),
+                    "Generated events from update command"
+                );
+                events
+            }
+            Err(e) => {
+                error!(error = %e, "Failed to handle update command");
+                return Err(AggregateError::UserError(e.into()));
+            }
+        };
 
         for event in &events {
-            aggregate
-                .apply(event.clone())
-                .map_err(|e| AggregateError::UserError(e.into()))?;
+            if let Err(e) = aggregate.apply(event.clone()) {
+                error!(error = %e, "Failed to apply event to aggregate");
+                return Err(AggregateError::UserError(e.into()));
+            }
         }
+        debug!("Applied events to aggregate");
 
-        let committed_events = self
+        let committed_events = match self
             .store
             .commit(events, &aggregate, metadata, version, context)
-            .await?;
+            .await
+        {
+            Ok(events) => {
+                debug!(event_count = events.len(), "Committed events to store");
+                events
+            }
+            Err(e) => {
+                error!(error = %e, "Failed to commit events");
+                return Err(e);
+            }
+        };
 
         if committed_events.is_empty() {
+            debug!("No events committed, returning early");
             return Ok(());
         }
+
+        debug!(
+            event_count = committed_events.len(),
+            "Dispatching events to handlers"
+        );
         self.handle_events(aggregate_id, &committed_events, context)
             .await;
+
+        info!("Aggregate updated successfully with metadata");
         Ok(())
     }
 
+    #[instrument(skip(self, aggregate, events, metadata, context), fields(aggregate_type = A::TYPE, aggregate_id = %aggregate_id, version = %version, event_count = events.len()))]
     async fn process(
         &self,
         aggregate_id: &str,
@@ -169,219 +281,184 @@ where
         metadata: HashMap<String, String>,
         context: &CqrsContext,
     ) -> Result<(), AggregateError> {
-        for event in &events {
-            aggregate
-                .apply(event.clone())
-                .map_err(|e| AggregateError::UserError(e.into()))?;
-        }
+        debug!("Processing events for aggregate");
 
-        let committed_events = self
+        for (i, event) in events.iter().enumerate() {
+            debug!(
+                event_index = i,
+                event_type = event.event_type(),
+                "Applying event to aggregate"
+            );
+            match aggregate.apply(event.clone()) {
+                Ok(_) => debug!(event_index = i, "Successfully applied event to aggregate"),
+                Err(e) => {
+                    error!(event_index = i, error = %e, "Failed to apply event to aggregate");
+                    return Err(AggregateError::UserError(e.into()));
+                }
+            }
+        }
+        debug!("Applied all events to aggregate");
+
+        debug!("Committing events to store");
+        let committed_events = match self
             .store
             .commit(events, &aggregate, metadata, version, context)
-            .await?;
+            .await
+        {
+            Ok(events) => {
+                debug!(
+                    event_count = events.len(),
+                    "Successfully committed events to store"
+                );
+                events
+            }
+            Err(e) => {
+                error!(error = %e, "Failed to commit events to store");
+                return Err(e);
+            }
+        };
 
         if committed_events.is_empty() {
+            debug!("No events committed, returning early");
             return Ok(());
         }
+
+        debug!(
+            event_count = committed_events.len(),
+            "Dispatching committed events to handlers"
+        );
         self.handle_events(aggregate_id, &committed_events, context)
             .await;
+
+        debug!("Successfully processed all events");
         Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::testing::{CreateCommand, TestAggregate, TestEvent, UpdateCommand};
     use crate::{
-        es::inmemory::InMemoryPersist, es::EventStoreImpl, Aggregate, CqrsCommandEngine,
-        CqrsContext, EventStore,
+        es::inmemory::InMemoryPersist, es::EventStoreImpl, CqrsCommandEngine, CqrsContext,
+        EventStore,
     };
-    use http::StatusCode;
-    use serde::{Deserialize, Serialize};
-    use utoipa::ToSchema;
-
-    // Structure de test pour l'agrégat
-    #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ToSchema)]
-    struct TestAggregate {
-        id: String,
-        counter: i32,
-    }
-
-    // Commandes de test
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-    enum CreateCommand {
-        Initialize,
-    }
-
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-    enum UpdateCommand {
-        Increment,
-        Decrement,
-    }
-
-    // Événements de test
-    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
-    enum TestEvent {
-        Created,
-        Incremented,
-        Decremented,
-    }
-
-    // Implémentation du trait Event pour TestEvent
-    impl crate::Event for TestEvent {
-        fn event_type(&self) -> String {
-            match self {
-                TestEvent::Created => "Created".to_string(),
-                TestEvent::Incremented => "Incremented".to_string(),
-                TestEvent::Decremented => "Decremented".to_string(),
-            }
-        }
-    }
-
-    // Implémentation de l'agrégat
-    #[async_trait::async_trait]
-    impl Aggregate for TestAggregate {
-        const TYPE: &'static str = "TEST";
-
-        type CreateCommand = CreateCommand;
-        type UpdateCommand = UpdateCommand;
-        type Event = TestEvent;
-        type Error = std::io::Error;
-        type Services = ();
-
-        fn aggregate_id(&self) -> String {
-            self.id.clone()
-        }
-
-        async fn handle_create(
-            &self,
-            _command: Self::CreateCommand,
-            _services: &Self::Services,
-            _context: &CqrsContext,
-        ) -> Result<Vec<Self::Event>, Self::Error> {
-            Ok(vec![TestEvent::Created])
-        }
-
-        async fn handle_update(
-            &self,
-            command: Self::UpdateCommand,
-            _services: &Self::Services,
-            _context: &CqrsContext,
-        ) -> Result<Vec<Self::Event>, Self::Error> {
-            match command {
-                UpdateCommand::Increment => Ok(vec![TestEvent::Incremented]),
-                UpdateCommand::Decrement => Ok(vec![TestEvent::Decremented]),
-            }
-        }
-
-        fn apply(&mut self, event: Self::Event) -> Result<(), Self::Error> {
-            match event {
-                TestEvent::Created => {}
-                TestEvent::Incremented => self.counter += 1,
-                TestEvent::Decremented => self.counter -= 1,
-            }
-            Ok(())
-        }
-
-        fn with_aggregate_id(self, id: String) -> Self {
-            Self { id, ..self }
-        }
-
-        fn error(_status: StatusCode, details: &str) -> Self::Error {
-            std::io::Error::new(std::io::ErrorKind::Other, details)
-        }
-    }
 
     #[tokio::test]
     async fn test_create_aggregate() {
-        // Préparation
+        // Preparation
         let persist = InMemoryPersist::<TestAggregate>::new();
         let store = EventStoreImpl::new(persist);
         let engine = CqrsCommandEngine::new(store, vec![], (), Box::new(|_e| {}));
 
         let context = CqrsContext::default();
 
-        // Exécution
+        // Execution 
         let aggregate_id = engine
-            .execute_create(CreateCommand::Initialize, &context)
+            .execute_create(
+                CreateCommand::Initialize {
+                    name: "toto".to_string(),
+                },
+                &context,
+            )
             .await
-            .expect("La création devrait réussir");
+            .expect("Creation should succeed");
 
-        // Vérification
+        // Verification
         assert!(
             !aggregate_id.is_empty(),
-            "L'ID de l'agrégat ne devrait pas être vide"
+            "Aggregate ID should not be empty"
         );
     }
 
     #[tokio::test]
     async fn test_update_aggregate() {
-        // Préparation
+        // Preparation
         let persist = InMemoryPersist::<TestAggregate>::new();
         let store = EventStoreImpl::new(persist);
         let engine = CqrsCommandEngine::new(store, vec![], (), Box::new(|_e| {}));
 
         let context = CqrsContext::default();
 
-        // Création de l'agrégat
+        // Create the aggregate
         let aggregate_id = engine
-            .execute_create(CreateCommand::Initialize, &context)
+            .execute_create(
+                CreateCommand::Initialize {
+                    name: "toto".to_string(),
+                },
+                &context,
+            )
             .await
-            .expect("La création devrait réussir");
+            .expect("Creation should succeed");
 
-        // Exécution de la mise à jour
+        // Execute the update
         engine
             .execute_update(&aggregate_id, UpdateCommand::Increment, &context)
             .await
-            .expect("La mise à jour devrait réussir");
+            .expect("Update should succeed");
 
-        // Vérification via les événements stockés
+        // Verify via stored events
         let events = engine
             .store
             .load_events(&aggregate_id)
             .await
-            .expect("Le chargement des événements devrait réussir");
+            .expect("Event loading should succeed");
 
-        assert_eq!(events.len(), 2, "Il devrait y avoir deux événements");
-        assert!(matches!(events[0].payload, TestEvent::Created));
+        assert_eq!(events.len(), 2, "There should be two events");
+        assert_eq!(
+            events[0].payload,
+            TestEvent::Created {
+                name: "toto".to_string()
+            }
+        );
         assert!(matches!(events[1].payload, TestEvent::Incremented));
     }
 
     #[tokio::test]
     async fn test_multiple_updates() {
-        // Préparation
+        // Preparation
         let persist = InMemoryPersist::<TestAggregate>::new();
         let store = EventStoreImpl::new(persist);
         let engine = CqrsCommandEngine::new(store, vec![], (), Box::new(|_e| {}));
 
         let context = CqrsContext::default();
 
-        // Création de l'agrégat
+        // Create the aggregate 
         let aggregate_id = engine
-            .execute_create(CreateCommand::Initialize, &context)
+            .execute_create(
+                CreateCommand::Initialize {
+                    name: "toto".to_string(),
+                },
+                &context,
+            )
             .await
-            .expect("La création devrait réussir");
+            .expect("Creation should succeed");
 
-        // Premier update
+        // First update
         engine
             .execute_update(&aggregate_id, UpdateCommand::Increment, &context)
             .await
-            .expect("Premier update devrait réussir");
+            .expect("First update should succeed");
 
-        // Deuxième update
+        // Second update
         engine
             .execute_update(&aggregate_id, UpdateCommand::Increment, &context)
             .await
-            .expect("Deuxième update devrait réussir");
+            .expect("Second update should succeed");
 
-        // Vérification
+        // Verification
         let events = engine
             .store
             .load_events(&aggregate_id)
             .await
-            .expect("Le chargement des événements devrait réussir");
+            .expect("Event loading should succeed");
 
-        assert_eq!(events.len(), 3, "Il devrait y avoir trois événements");
-        assert!(matches!(events[0].payload, TestEvent::Created));
+        assert_eq!(events.len(), 3, "There should be three events");
+        assert_eq!(
+            events[0].payload,
+            TestEvent::Created {
+                name: "toto".to_string()
+            }
+        );
         assert!(matches!(events[1].payload, TestEvent::Incremented));
         assert!(matches!(events[2].payload, TestEvent::Incremented));
     }
