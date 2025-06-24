@@ -4,6 +4,7 @@ use utoipa::ToSchema;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "utoipa", derive(ToSchema))]
+#[serde(rename_all = "camelCase")]
 pub struct Paged<T> {
     pub items: Vec<T>,
     pub total: i64,
