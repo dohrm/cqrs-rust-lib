@@ -18,4 +18,8 @@ impl QueryBuilder<AccountQuery> for QueryBuilderAccount {
     fn to_skip_limit(&self, query: &AccountQuery, _context: &CqrsContext) -> SkipLimit {
         SkipLimit::new(query.skip.map(|s| s as u64), query.limit)
     }
+
+    fn to_sort(&self, _query: &AccountQuery, _context: &CqrsContext) -> Option<Document> {
+        None
+    }
 }

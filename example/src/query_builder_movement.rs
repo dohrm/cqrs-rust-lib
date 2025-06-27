@@ -14,4 +14,8 @@ impl QueryBuilder<MovementQuery> for QueryBuilderMovement {
     fn to_skip_limit(&self, query: &MovementQuery, _context: &CqrsContext) -> SkipLimit {
         SkipLimit::new(query.skip.map(|s| s as u64), query.limit)
     }
+
+    fn to_sort(&self, _query: &MovementQuery, _context: &CqrsContext) -> Option<Document> {
+        None
+    }
 }

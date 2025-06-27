@@ -31,6 +31,7 @@ impl SkipLimit {
 
 pub trait QueryBuilder<Q>: Debug + Clone + Send + Sync {
     fn to_query(&self, query: &Q, context: &CqrsContext) -> Document;
+    fn to_sort(&self, query: &Q, context: &CqrsContext) -> Option<Document>;
     fn to_skip_limit(&self, query: &Q, context: &CqrsContext) -> SkipLimit;
 }
 
@@ -101,6 +102,7 @@ where
     ) -> Result<Paged<V>, AggregateError> {
         let collection = self.database.collection::<V>(&self.collection_name);
         let q = self.parent_id_query(self.query_builder.to_query(&query, &context), &parent_id)?;
+        let sort = self.query_builder.to_sort(&query, &context);
         let SkipLimit { skip, limit } = self.query_builder.to_skip_limit(&query, &context);
         let total = collection
             .count_documents(q.clone())
@@ -108,12 +110,14 @@ where
             .map_err(map_mongo_error)?;
         let skip = skip.unwrap_or(0u64);
         let limit = limit.unwrap_or(20i64);
-        let cursor = collection
-            .find(q.clone())
-            .skip(skip)
-            .limit(limit)
-            .await
-            .map_err(map_mongo_error)?;
+        let find = collection.find(q.clone()).skip(skip).limit(limit);
+        let cursor = (if let Some(sort) = sort {
+            find.sort(sort)
+        } else {
+            find
+        })
+        .await
+        .map_err(map_mongo_error)?;
 
         let items = cursor.try_collect().await.map_err(map_mongo_error)?;
         Ok(Paged {
