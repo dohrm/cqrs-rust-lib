@@ -10,6 +10,7 @@ use http::StatusCode;
 use serde::de::DeserializeOwned;
 use serde_json::json;
 use std::fmt::Debug;
+use std::sync::Arc;
 use utoipa::openapi::path::ParameterIn;
 use utoipa::openapi::{HttpMethod, Ref, RefOr, Schema};
 use utoipa::{IntoParams, PartialSchema, ToSchema};
@@ -24,7 +25,7 @@ where
     S: Storage<V, Q>,
 {
     _phantom: std::marker::PhantomData<(A, V, Q)>,
-    storage: S,
+    storage: Arc<S>,
 }
 
 impl<A, V, S, Q> CQRSReadRouter<A, V, S, Q>
@@ -35,7 +36,7 @@ where
     S: Storage<V, Q> + 'static,
 {
     #[must_use]
-    fn new(storage: S) -> Self {
+    fn new(storage: Arc<S>) -> Self {
         Self {
             _phantom: std::marker::PhantomData,
             storage,
@@ -156,7 +157,7 @@ where
         )))
     }
 
-    pub fn routes(storage: S, tag: &'static str) -> OpenApiRouter {
+    pub fn routes(storage: Arc<S>, tag: &'static str) -> OpenApiRouter {
         let state = Self::new(storage);
 
         let mut result = OpenApiRouter::<CQRSReadRouter<A, V, S, Q>>::new();

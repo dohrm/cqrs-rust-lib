@@ -108,7 +108,7 @@ pub async fn start(config: AppConfig) -> Result<(), Box<dyn std::error::Error + 
     // Storages
     let account_es_store = MongoDBPersist::<Account>::new(database.clone());
 
-    let account_repository = MongoDBFromSnapshotStorage::new(Arc::new(MongoDbStorage::<
+    let account_repository = Arc::new(MongoDBFromSnapshotStorage::new(Arc::new(MongoDbStorage::<
         Snapshot<Account>,
         AccountQuery,
         QueryBuilderAccount,
@@ -117,27 +117,31 @@ pub async fn start(config: AppConfig) -> Result<(), Box<dyn std::error::Error + 
         "accounts",
         QueryBuilderAccount,
         account_es_store.snapshot_collection_name(),
-    )));
+    ))));
 
-    let movement_repository = MongoDbStorage::<Movement, MovementQuery, QueryBuilderMovement>::new(
+    let movement_repository = Arc::new(MongoDbStorage::<
+        Movement,
+        MovementQuery,
+        QueryBuilderMovement,
+    >::new(
         database.clone(),
         "movements",
         QueryBuilderMovement,
         "movements_view",
-    );
+    ));
     let movement_dispatcher = ViewDispatcher::new(movement_repository.clone());
 
     // CQRS Command
     let accounts_event_store = EventStoreImpl::new(account_es_store);
     let accounts_effects: Vec<Box<dyn Dispatcher<Account>>> = vec![Box::new(movement_dispatcher)];
-    let accounts_engine = CqrsCommandEngine::new(
+    let accounts_engine = Arc::new(CqrsCommandEngine::new(
         accounts_event_store,
         accounts_effects,
         (),
         Box::new(|e| {
             error!("something went wrong: {}", e);
         }),
-    );
+    ));
 
     // Initialize routers
     let accounts_read_router = CQRSReadRouter::routes(account_repository, Account::TYPE);

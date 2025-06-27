@@ -39,13 +39,11 @@ where
     ES: EventStore<A> + 'static,
 {
     #[must_use]
-    fn new(engine: CqrsCommandEngine<A, ES>) -> Self {
-        Self {
-            engine: Arc::new(engine),
-        }
+    fn new(engine: Arc<CqrsCommandEngine<A, ES>>) -> Self {
+        Self { engine }
     }
 
-    pub fn routes(engine: CqrsCommandEngine<A, ES>) -> OpenApiRouter {
+    pub fn routes(engine: Arc<CqrsCommandEngine<A, ES>>) -> OpenApiRouter {
         let context = CQRSWriteRouter::new(engine);
 
         let mut result = OpenApiRouter::<CQRSWriteRouter<A, ES>>::new();

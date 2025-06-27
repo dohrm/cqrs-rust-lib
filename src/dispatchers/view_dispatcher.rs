@@ -2,10 +2,11 @@ use crate::read::storage::{HasId, Storage};
 use crate::{Aggregate, AggregateError, CqrsContext, Dispatcher, EventEnvelope, View};
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;
+use std::sync::Arc;
 
 pub struct ViewDispatcher<A, V, S, Q> {
     _phantom: std::marker::PhantomData<(A, V, S, Q)>,
-    storage: S,
+    storage: Arc<S>,
 }
 
 impl<A, V, S, Q> ViewDispatcher<A, V, S, Q>
@@ -15,7 +16,7 @@ where
     Q: Clone + Debug + DeserializeOwned + Send + Sync,
     S: Storage<V, Q>,
 {
-    pub fn new(storage: S) -> Self {
+    pub fn new(storage: Arc<S>) -> Self {
         Self {
             _phantom: std::marker::PhantomData,
             storage,
