@@ -99,7 +99,9 @@ mod tests {
                 event_id: "event1".to_string(),
                 aggregate_id: "agg1".to_string(),
                 version: 1,
-                payload: TestEvent::Created { name: "toto".to_string() },
+                payload: TestEvent::Created {
+                    name: "toto".to_string(),
+                },
                 metadata: HashMap::new(),
                 at: Utc::now(),
             }],
