@@ -33,6 +33,18 @@ where
                 A::error(StatusCode::CONFLICT, "Aggregate already exists").into(),
             ));
         }
+
+        // Even if no snapshot exists, previously committed events indicate that the
+        // aggregate has already been created. Allowing initialization in such a
+        // case would overwrite existing state. To prevent this, we check if any
+        // events are present and return a conflict error if so.
+        let existing_events = self.load_events(aggregate_id).await?;
+        if !existing_events.is_empty() {
+            return Err(AggregateError::UserError(
+                A::error(StatusCode::CONFLICT, "Aggregate already exists").into(),
+            ));
+        }
+
         Ok((A::default().with_aggregate_id(aggregate_id.to_string()), 0))
     }
 
@@ -65,4 +77,41 @@ where
         version: usize,
         context: &CqrsContext,
     ) -> Result<Vec<EventEnvelope<A>>, AggregateError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::es::inmemory::InMemoryPersist;
+    use crate::es::storage::EventStoreStorage;
+    use crate::es::EventStoreImpl;
+    use crate::testing::{TestAggregate, TestEvent};
+    use chrono::Utc;
+
+    #[tokio::test]
+    async fn initialize_aggregate_returns_conflict_when_events_exist_without_snapshot() {
+        // Arrange: set up a persistence layer containing events but no snapshot
+        let persist = InMemoryPersist::<TestAggregate>::new();
+        let mut session = persist.start_session().await.unwrap();
+        session.1.insert(
+            "agg1".to_string(),
+            vec![EventEnvelope {
+                event_id: "event1".to_string(),
+                aggregate_id: "agg1".to_string(),
+                version: 1,
+                payload: TestEvent::Created { name: "toto".to_string() },
+                metadata: HashMap::new(),
+                at: Utc::now(),
+            }],
+        );
+        persist.close_session(session).await.unwrap();
+
+        let store = EventStoreImpl::new(persist);
+
+        // Act
+        let result = store.initialize_aggregate("agg1").await;
+
+        // Assert: initializing should fail with a conflict because events already exist
+        assert!(matches!(result, Err(AggregateError::UserError(_))));
+    }
 }
