@@ -2,7 +2,7 @@ use crate::es::storage::EventStoreStorage;
 use crate::{Aggregate, AggregateError, EventEnvelope, Snapshot};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{Mutex, OwnedMutexGuard};
+use futures::lock::{Mutex, OwnedMutexGuard};
 
 #[derive(Clone, Debug, Default)]
 pub struct InMemoryPersist<A>

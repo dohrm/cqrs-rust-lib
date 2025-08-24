@@ -143,7 +143,7 @@ pub fn read_schema(name: &str, schema: RefOr<Schema>) -> Vec<SchemaData> {
     }
     result
 }
-
+#[allow(clippy::collapsible_if)]
 pub fn add_discriminator(item: &mut Value, discriminator: Option<(String, String)>) {
     if let Some((name, value)) = discriminator {
         if let Some(obj) = item.as_object_mut() {
