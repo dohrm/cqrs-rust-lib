@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use example::api;
+use bank::api;
 use tracing::Level;
 use tracing_subscriber::fmt::layer;
 use tracing_subscriber::layer::SubscriberExt;

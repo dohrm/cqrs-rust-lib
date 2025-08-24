@@ -3,7 +3,7 @@ mod integration_tests {
     use cqrs_rust_lib::es::storage::EventStoreStorage;
     use cqrs_rust_lib::es::EventStoreImpl;
     use cqrs_rust_lib::CqrsContext;
-    use example::account::{Account, CreateCommands, UpdateCommands};
+    use bank::account::{Account, CreateCommands, UpdateCommands};
     use mongodb::{Client, Database};
     use std::env;
 

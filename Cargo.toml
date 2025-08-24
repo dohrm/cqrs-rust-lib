@@ -6,9 +6,10 @@ license-file = "LICENSE"
 version = "0.1.0"
 
 [features]
-all = ["utoipa", "mongodb"]
+all = ["utoipa", "mongodb", "postgres"]
 utoipa = []
 mongodb = []
+postgres = ["dep:tokio-postgres"]
 
 [dependencies]
 async-trait = "^0.1.0"
@@ -19,7 +20,7 @@ mongodb = { version = "^3.2.0", features = ["rustls-tls"] }
 serde = { version = "^1.0.0", features = ["serde_derive"] }
 tracing = { version = "0.1.41" }
 thiserror = "^2.0.0"
-tokio = "^1.45.0"
+tokio = { version = "^1.45.0", features = ["rt-multi-thread", "macros"] }
 utoipa = "^5.4.0"
 utoipa-axum = "^0.2.0"
 axum = "0.8.4"
@@ -27,7 +28,9 @@ serde_json = "1.0.140"
 uuid = { version = "1.17.0", features = ["v4"] }
 rand = "0.9.1"
 futures = "0.3.31"
+# Postgres client for postgres feature
+tokio-postgres = { version = "0.7.12", optional = true, features = ["with-serde_json-1", "with-chrono-0_4"] }
 
 [workspace]
-members = ["example"]
+members = ["example/bank", "example/todolist"]
 resolver = "3"
