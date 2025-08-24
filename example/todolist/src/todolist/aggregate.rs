@@ -3,7 +3,6 @@ use super::events::Events;
 use cqrs_rust_lib::{Aggregate, CqrsContext, EventEnvelope, View};
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
-use std::io::ErrorKind;
 use utoipa::ToSchema;
 
 const AGGREGATE_TYPE: &str = "todolist";
@@ -64,10 +63,9 @@ impl Aggregate for TodoList {
                 title,
             }]),
             UpdateCommands::RemoveTodo { todo_id } => Ok(vec![Events::TodoRemoved { todo_id }]),
-            UpdateCommands::AssignTodo { todo_id, assignee } => Ok(vec![Events::TodoAssignedTo {
-                todo_id,
-                assignee,
-            }]),
+            UpdateCommands::AssignTodo { todo_id, assignee } => {
+                Ok(vec![Events::TodoAssignedTo { todo_id, assignee }])
+            }
             UpdateCommands::ResolveTodo { todo_id } => Ok(vec![Events::TodoResolved { todo_id }]),
         }
     }
@@ -77,14 +75,12 @@ impl Aggregate for TodoList {
             Events::TodoListCreated { name } => {
                 self.name = name;
             }
-            Events::TodoAdded { todo_id, title } => {
-                self.todos.push(Todo {
-                    id: todo_id,
-                    title,
-                    assignee: None,
-                    resolved: false,
-                })
-            }
+            Events::TodoAdded { todo_id, title } => self.todos.push(Todo {
+                id: todo_id,
+                title,
+                assignee: None,
+                resolved: false,
+            }),
             Events::TodoRemoved { todo_id } => {
                 self.todos.retain(|t| t.id != todo_id);
             }
@@ -103,7 +99,7 @@ impl Aggregate for TodoList {
     }
 
     fn error(_status: StatusCode, details: &str) -> Self::Error {
-        std::io::Error::new(ErrorKind::Other, details.to_string())
+        std::io::Error::other(details.to_string())
     }
 }
 

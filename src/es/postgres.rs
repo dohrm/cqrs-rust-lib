@@ -4,7 +4,6 @@ use crate::snapshot::Snapshot;
 use crate::{Aggregate, EventEnvelope};
 use serde_json::Value as JsonValue;
 use std::sync::Arc;
-use tracing::debug;
 
 use tokio_postgres::Client;
 
@@ -54,7 +53,10 @@ where
     type Session = ();
 
     async fn start_session(&self) -> Result<Self::Session, AggregateError> {
-        self.client.batch_execute("BEGIN").await.map_err(map_pg_error)?;
+        self.client
+            .batch_execute("BEGIN")
+            .await
+            .map_err(map_pg_error)?;
         Ok(())
     }
 
@@ -217,7 +219,14 @@ where
             self.client
                 .execute(
                     &sql,
-                    &[&e.event_id, &e.aggregate_id, &(e.version as i64), &payload, &metadata, &e.at],
+                    &[
+                        &e.event_id,
+                        &e.aggregate_id,
+                        &(e.version as i64),
+                        &payload,
+                        &metadata,
+                        &e.at,
+                    ],
                 )
                 .await
                 .map_err(map_pg_error)?;
