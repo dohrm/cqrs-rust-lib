@@ -18,6 +18,14 @@ jobs:
         image: mongo:latest
         ports:
           - 27017:27017
+      postgres:
+        image: postgres:latest
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
     steps:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@stable
@@ -25,9 +33,11 @@ jobs:
       - name: Run tests
         run: |
           cargo test --all-features
-          cargo test -p example
+          cargo test -p bank
+          cargo test -p todolist
         env:
           MONGODB_TEST_URI: mongodb://localhost:27017
+          PG_TEST_URI: postgres://postgres:postgres@localhost:5432/postgres
 
   lint:
     name: Lint

@@ -4,15 +4,15 @@ A comprehensive Command Query Responsibility Segregation (CQRS) and Event Sourci
 
 ## Features
 
-- **CQRS Pattern Implementation**: Separate command and query responsibilities
-- **Event Sourcing**: Store state changes as a sequence of events
-- **Multiple Storage Options**:
-    - In-memory storage for testing and development
-    - MongoDB persistence for production use
-- **Aggregate Pattern**: Define domain entities with encapsulated business logic
-- **Async Support**: Built with async/await for non-blocking operations
-- **REST API Integration**: Optional REST API integration with Axum
-- **API Documentation**: Optional OpenAPI documentation with utoipa
+- CQRS and Event Sourcing core primitives
+- Multiple storage options:
+  - In-memory storage (testing/development)
+  - MongoDB persistence (feature: `mongodb`)
+  - PostgreSQL persistence (feature: `postgres`)
+- Aggregate pattern with async command handling and event application
+- REST routers (feature: `utoipa`) with Axum and OpenAPI integration
+- Typed PostgreSQL read storage utilities (feature: `postgres`)
+- Optional dispatchers for denormalization/effects
 
 ## Installation
 
@@ -23,106 +23,154 @@ Add this to your `Cargo.toml`:
 cqrs-rust-lib = "0.1.0"
 ```
 
-### Features
+### Cargo features
 
 - `mongodb`: Enable MongoDB persistence
-- `utoipa`: Enable REST API and OpenAPI documentation
-- `all`: Enable all features
+- `postgres`: Enable PostgreSQL persistence and read utilities
+- `utoipa`: Enable REST routers and OpenAPI integration
+- `mcp`: Enable MCP server integration (experimental)
+- `all`: Enable `utoipa`, `mongodb`, and `postgres`
+
+Examples:
 
 ```toml
-# Example with MongoDB support
 [dependencies]
+# MongoDB support
 cqrs-rust-lib = { version = "0.1.0", features = ["mongodb"] }
+```
+
+```toml
+[dependencies]
+# PostgreSQL + REST
+cqrs-rust-lib = { version = "0.1.0", features = ["postgres", "utoipa"] }
 ```
 
 ## Usage
 
-### Basic Example
+### Basic (in-memory) example
 
 ```rust
-use cqrs_rust_lib::{Aggregate, CqrsCommandEngine, CqrsContext, Event};
-use cqrs_rust_lib::es::inmemory::InMemoryPersist;
-use cqrs_rust_lib::es::EventStoreImpl;
+use cqrs_rust_lib::{Aggregate, CqrsCommandEngine, CqrsContext};
+use cqrs_rust_lib::es::{inmemory::InMemoryPersist, EventStoreImpl};
+use http::StatusCode;
+use serde::{Deserialize, Serialize};
 
-// Define your aggregate
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct Account {
     id: String,
-    balance: f64,
+    balance: i64,
 }
 
-// Implement the Aggregate trait
 #[async_trait::async_trait]
 impl Aggregate for Account {
-    // Implementation details...
+    const TYPE: &'static str = "account";
+    type CreateCommand = CreateAccount;
+    type UpdateCommand = AccountUpdate;
+    type Event = AccountEvent;
+    type Services = ();
+    type Error = anyhow::Error;
+
+    fn aggregate_id(&self) -> String { self.id.clone() }
+    fn with_aggregate_id(mut self, id: String) -> Self { self.id = id; self }
+
+    async fn handle_create(&self, _cmd: Self::CreateCommand, _svc: &(), _ctx: &CqrsContext) -> Result<Vec<Self::Event>, Self::Error> {
+        Ok(vec![AccountEvent::Opened])
+    }
+    async fn handle_update(&self, cmd: Self::UpdateCommand, _svc: &(), _ctx: &CqrsContext) -> Result<Vec<Self::Event>, Self::Error> {
+        match cmd { AccountUpdate::Deposit { amount } => Ok(vec![AccountEvent::Deposited { amount }]) }
+    }
+    fn apply(&mut self, event: Self::Event) -> Result<(), Self::Error> {
+        match event { AccountEvent::Opened => (), AccountEvent::Deposited { amount } => self.balance += amount };
+        Ok(())
+    }
+    fn error(_status: StatusCode, details: &str) -> Self::Error { anyhow::anyhow!(details.to_string()) }
 }
 
-// Create and use the CQRS engine
-async fn main() {
-    // Create an in-memory event store
-    let store = InMemoryPersist::<Account>::new();
-    let event_store = EventStoreImpl::new(store);
+#[derive(Debug, Clone, Serialize, Deserialize)] struct CreateAccount;
+#[derive(Debug, Clone, Serialize, Deserialize)] enum AccountUpdate { Deposit { amount: i64 } }
+#[derive(Debug, Clone, Serialize, Deserialize)] enum AccountEvent { Opened, Deposited { amount: i64 } }
 
-    // Create the CQRS engine
-    let engine = CqrsCommandEngine::new(event_store, vec![], ());
-    let context = CqrsContext::default();
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let persist = InMemoryPersist::<Account>::new();
+    let event_store = EventStoreImpl::new(persist);
+    let engine = CqrsCommandEngine::new(
+        event_store,
+        vec![], // dispatchers
+        (),     // services
+        Box::new(|e| eprintln!("error: {e}")),
+    );
 
-    // Execute commands
-    let account_id = engine
-        .execute_create(CreateAccountCommand::Create, &context)
-        .await
-        .expect("Failed to create account");
+    let ctx = CqrsContext::default();
+    let id = engine.execute_create(CreateAccount, &ctx).await?;
+    engine.execute_update(&id, AccountUpdate::Deposit { amount: 100 }, &ctx).await?;
 
-    engine
-        .execute_update(&account_id, DepositCommand { amount: 100.0 }, &context)
-        .await
-        .expect("Failed to deposit");
+    // With metadata
+    use std::collections::HashMap;
+    let mut meta = HashMap::new();
+    meta.insert("source".into(), "readme".into());
+    engine.execute_update_with_metadata(&id, AccountUpdate::Deposit { amount: 25 }, meta, &ctx).await?;
+    Ok(())
 }
 ```
 
-### MongoDB Example
+### PostgreSQL example
+
+Requires feature `postgres`.
 
 ```rust
-use cqrs_rust_lib::es::mongodb::MongoDBPersist;
-use mongodb::{Client, Database};
+use cqrs_rust_lib::es::{postgres::PostgresPersist, EventStoreImpl};
+use cqrs_rust_lib::{CqrsCommandEngine, Dispatcher};
+use std::sync::Arc;
+use tokio_postgres::NoTls;
 
-async fn setup_mongodb() {
-    let client = Client::with_uri_str("mongodb://localhost:27017")
-        .await
-        .expect("Failed to connect to MongoDB");
-    let database = client.database("my_app");
+async fn setup() -> anyhow::Result<()> {
+let (client, connection) = tokio_postgres::connect("postgres://user:pass@localhost/db", NoTls).await?;
+tokio::spawn(async move { let _ = connection.await; });
+let client = Arc::new(client);
 
-    let store = MongoDBPersist::<Account>::new(database);
-    let event_store = EventStoreImpl::new(store);
-
-    // Create the CQRS engine with MongoDB persistence
-    let engine = CqrsCommandEngine::new(event_store, vec![], ());
-}
+let es_store = PostgresPersist::<Account>::new(client.clone());
+let event_store = EventStoreImpl::new(es_store);
+let engine = CqrsCommandEngine::new(event_store, vec![] as Vec<Box<dyn Dispatcher<Account>>>, (), Box::new(|e| eprintln!("{e}")));
+Ok(()) }
 ```
+
+### REST routers (optional, feature `utoipa`)
+
+- Write router: `rest::CQRSWriteRouter::routes(Arc<CqrsCommandEngine<_, _>>)`
+- Read router: `rest::CQRSReadRouter::routes(repository, Aggregate::TYPE)`
+- See a complete wiring in `example\todolist\src\api.rs`.
 
 ## API Overview
 
-### Core Components
+- Aggregate: Define domain behavior and state transitions
+- CqrsCommandEngine: Execute create/update commands, with optional metadata
+- EventStore: trait (see `src\event_store.rs`); `EventStoreImpl` provided for common storages
+- Event store implementations: `es::inmemory::InMemoryPersist`, `es::mongodb::MongoDBPersist` (feature), `es::postgres::PostgresPersist` (feature)
+- Read utilities: `read::postgres::{PostgresStorage, PostgresFromSnapshotStorage}` (feature: `postgres`)
 
-- **Aggregate**: Trait for domain entities with business logic
-- **Event**: Trait for domain events
-- **CqrsCommandEngine**: Main engine for executing commands
-- **EventStore**: Interface for event persistence
-- **CqrsContext**: Context for command execution
+## Examples and running
 
-### Event Store Implementations
+- example\todolist: full REST app with PostgreSQL and Swagger UI
+- example\bank: domain-centric showcase
 
-- **InMemoryPersist**: In-memory storage for testing
-- **MongoDBPersist**: MongoDB-based persistence
+Run todolist (PowerShell):
 
-## To run the example project:
-
-```shell
-cargo run -p example -- start --mongo-uri=mongodb://localhost:27017/test-lib --http-port=8989 --log-level=debug
+```powershell
+cargo run -p todolist -- start --pg-uri="postgres://user:pass@localhost:5432/db" --http-port=8081
 ```
 
-```shell
-cargo watch -x "run -p example -- start --http-port=8989 --mongo-uri=mongodb://localhost:27017/test-lib --log-level=debug"
+Or set env variable for URI:
+
+```powershell
+$env:PG_URL_SECRET = "postgres://user:pass@localhost:5432/db"; cargo run -p todolist -- start --http-port=8081
+```
+
+Run tests:
+
+```powershell
+cargo test
+cargo test -p todolist
 ```
 
 ## License
@@ -131,5 +179,4 @@ This project is licensed under the terms found in the [LICENSE](LICENSE) file.
 
 ## Contributing
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details on how to contribute to this
-project.
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details on how to contribute to this project.

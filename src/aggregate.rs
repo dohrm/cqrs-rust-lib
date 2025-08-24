@@ -1,8 +1,8 @@
-use crate::CqrsContext;
 use crate::event::Event;
+use crate::CqrsContext;
 use http::StatusCode;
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 use std::fmt::Debug;
 #[cfg(feature = "utoipa")]
 use utoipa::ToSchema;
