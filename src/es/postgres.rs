@@ -1,10 +1,10 @@
 use crate::errors::AggregateError;
-use crate::es::storage::EventStoreStorage;
+use crate::es::storage::{EventStoreStorage, EventStream};
 use crate::snapshot::Snapshot;
 use crate::{Aggregate, EventEnvelope};
+use futures::stream;
 use serde_json::Value as JsonValue;
 use std::sync::Arc;
-
 use tokio_postgres::Client;
 
 fn map_pg_error<E: std::error::Error + Send + Sync + 'static>(e: E) -> AggregateError {
@@ -47,7 +47,7 @@ where
 #[async_trait::async_trait]
 impl<A> EventStoreStorage<A> for PostgresPersist<A>
 where
-    A: Aggregate,
+    A: Aggregate + 'static,
 {
     // Minimal session: we control transaction with BEGIN/COMMIT on the same client
     type Session = ();
@@ -99,7 +99,7 @@ where
         &self,
         aggregate_id: &str,
         version: usize,
-    ) -> Result<Vec<EventEnvelope<A>>, AggregateError> {
+    ) -> Result<EventStream<A>, AggregateError> {
         let sql = format!(
             "SELECT event_id, aggregate_id, version, payload, metadata, at FROM {} WHERE aggregate_id = $1 AND version > $2 ORDER BY version ASC",
             self.journal_table_name
@@ -109,31 +109,32 @@ where
             .query(&sql, &[&aggregate_id, &(version as i64)])
             .await
             .map_err(map_pg_error)?;
-        let mut result = Vec::with_capacity(rows.len());
-        for row in rows {
-            let payload: JsonValue = row.try_get("payload").map_err(map_pg_error)?;
-            let metadata: JsonValue = row.try_get("metadata").map_err(map_pg_error)?;
-            let env = EventEnvelope::<A> {
-                event_id: row.try_get::<_, String>("event_id").map_err(map_pg_error)?,
-                aggregate_id: row
-                    .try_get::<_, String>("aggregate_id")
-                    .map_err(map_pg_error)?,
-                version: row.try_get::<_, i64>("version").map_err(map_pg_error)? as usize,
-                payload: serde_json::from_value(payload)
-                    .map_err(|e| AggregateError::SerializationError(Box::new(e)))?,
-                metadata: serde_json::from_value(metadata)
-                    .map_err(|e| AggregateError::SerializationError(Box::new(e)))?,
-                at: row.try_get("at").map_err(map_pg_error)?,
-            };
-            result.push(env);
-        }
-        Ok(result)
+
+        let events: Result<Vec<EventEnvelope<A>>, AggregateError> = rows
+            .into_iter()
+            .map(|row| {
+                let payload: JsonValue = row.try_get("payload").map_err(map_pg_error)?;
+                let metadata: JsonValue = row.try_get("metadata").map_err(map_pg_error)?;
+                Ok(EventEnvelope::<A> {
+                    event_id: row.try_get::<_, String>("event_id").map_err(map_pg_error)?,
+                    aggregate_id: row
+                        .try_get::<_, String>("aggregate_id")
+                        .map_err(map_pg_error)?,
+                    version: row.try_get::<_, i64>("version").map_err(map_pg_error)? as usize,
+                    payload: serde_json::from_value(payload)
+                        .map_err(|e| AggregateError::SerializationError(Box::new(e)))?,
+                    metadata: serde_json::from_value(metadata)
+                        .map_err(|e| AggregateError::SerializationError(Box::new(e)))?,
+                    at: row.try_get("at").map_err(map_pg_error)?,
+                })
+            })
+            .collect();
+
+        let events = events?;
+        Ok(Box::pin(stream::iter(events.into_iter().map(Ok))))
     }
 
-    async fn fetch_all_events(
-        &self,
-        aggregate_id: &str,
-    ) -> Result<Vec<EventEnvelope<A>>, AggregateError> {
+    async fn fetch_all_events(&self, aggregate_id: &str) -> Result<EventStream<A>, AggregateError> {
         let sql = format!(
             "SELECT event_id, aggregate_id, version, payload, metadata, at FROM {} WHERE aggregate_id = $1 ORDER BY version ASC",
             self.journal_table_name
@@ -143,25 +144,83 @@ where
             .query(&sql, &[&aggregate_id])
             .await
             .map_err(map_pg_error)?;
-        let mut result = Vec::with_capacity(rows.len());
-        for row in rows {
-            let payload: JsonValue = row.try_get("payload").map_err(map_pg_error)?;
-            let metadata: JsonValue = row.try_get("metadata").map_err(map_pg_error)?;
-            let env = EventEnvelope::<A> {
-                event_id: row.try_get::<_, String>("event_id").map_err(map_pg_error)?,
-                aggregate_id: row
-                    .try_get::<_, String>("aggregate_id")
-                    .map_err(map_pg_error)?,
-                version: row.try_get::<_, i64>("version").map_err(map_pg_error)? as usize,
-                payload: serde_json::from_value(payload)
-                    .map_err(|e| AggregateError::SerializationError(Box::new(e)))?,
-                metadata: serde_json::from_value(metadata)
-                    .map_err(|e| AggregateError::SerializationError(Box::new(e)))?,
-                at: row.try_get("at").map_err(map_pg_error)?,
-            };
-            result.push(env);
-        }
-        Ok(result)
+
+        let events: Result<Vec<EventEnvelope<A>>, AggregateError> = rows
+            .into_iter()
+            .map(|row| {
+                let payload: JsonValue = row.try_get("payload").map_err(map_pg_error)?;
+                let metadata: JsonValue = row.try_get("metadata").map_err(map_pg_error)?;
+                Ok(EventEnvelope::<A> {
+                    event_id: row.try_get::<_, String>("event_id").map_err(map_pg_error)?,
+                    aggregate_id: row
+                        .try_get::<_, String>("aggregate_id")
+                        .map_err(map_pg_error)?,
+                    version: row.try_get::<_, i64>("version").map_err(map_pg_error)? as usize,
+                    payload: serde_json::from_value(payload)
+                        .map_err(|e| AggregateError::SerializationError(Box::new(e)))?,
+                    metadata: serde_json::from_value(metadata)
+                        .map_err(|e| AggregateError::SerializationError(Box::new(e)))?,
+                    at: row.try_get("at").map_err(map_pg_error)?,
+                })
+            })
+            .collect();
+
+        let events = events?;
+        Ok(Box::pin(stream::iter(events.into_iter().map(Ok))))
+    }
+
+    async fn fetch_events_paged(
+        &self,
+        aggregate_id: &str,
+        page: usize,
+        page_size: usize,
+    ) -> Result<(Vec<EventEnvelope<A>>, i64), AggregateError> {
+        // Get total count
+        let count_sql = format!(
+            "SELECT COUNT(*) FROM {} WHERE aggregate_id = $1",
+            self.journal_table_name
+        );
+        let count_row = self
+            .client
+            .query_one(&count_sql, &[&aggregate_id])
+            .await
+            .map_err(map_pg_error)?;
+        let total: i64 = count_row.try_get(0).map_err(map_pg_error)?;
+
+        // Get paginated events
+        let offset = ((page.max(1) - 1) * page_size) as i64;
+        let sql = format!(
+            "SELECT event_id, aggregate_id, version, payload, metadata, at FROM {} WHERE aggregate_id = $1 ORDER BY version ASC LIMIT $2 OFFSET $3",
+            self.journal_table_name
+        );
+        let rows = self
+            .client
+            .query(&sql, &[&aggregate_id, &(page_size as i64), &offset])
+            .await
+            .map_err(map_pg_error)?;
+
+        let events: Result<Vec<EventEnvelope<A>>, AggregateError> = rows
+            .into_iter()
+            .map(|row| {
+                let payload: JsonValue = row.try_get("payload").map_err(map_pg_error)?;
+                let metadata: JsonValue = row.try_get("metadata").map_err(map_pg_error)?;
+                Ok(EventEnvelope::<A> {
+                    event_id: row.try_get::<_, String>("event_id").map_err(map_pg_error)?,
+                    aggregate_id: row
+                        .try_get::<_, String>("aggregate_id")
+                        .map_err(map_pg_error)?,
+                    version: row.try_get::<_, i64>("version").map_err(map_pg_error)? as usize,
+                    payload: serde_json::from_value(payload)
+                        .map_err(|e| AggregateError::SerializationError(Box::new(e)))?,
+                    metadata: serde_json::from_value(metadata)
+                        .map_err(|e| AggregateError::SerializationError(Box::new(e)))?,
+                    at: row.try_get("at").map_err(map_pg_error)?,
+                })
+            })
+            .collect();
+
+        let events = events?;
+        Ok((events, total))
     }
 
     async fn fetch_latest_event(

@@ -27,7 +27,7 @@ pub struct UpdateResult;
 #[derive(Clone)]
 pub struct CQRSWriteRouter<A, ES>
 where
-    A: Aggregate + ToSchema,
+    A: Aggregate + ToSchema + 'static,
     ES: EventStore<A>,
 {
     engine: Arc<CqrsCommandEngine<A, ES>>,

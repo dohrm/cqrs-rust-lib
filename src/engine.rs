@@ -46,7 +46,7 @@ use tracing::{debug, error, info};
 /// from querying, while keeping event storage and dispatching modular and configurable.
 pub struct CqrsCommandEngine<A, ES>
 where
-    A: Aggregate,
+    A: Aggregate + 'static,
     ES: EventStore<A>,
 {
     store: ES,
@@ -57,7 +57,7 @@ where
 
 impl<A, ES> CqrsCommandEngine<A, ES>
 where
-    A: Aggregate,
+    A: Aggregate + 'static,
     ES: EventStore<A>,
 {
     #[must_use]
@@ -334,8 +334,9 @@ mod tests {
     use crate::testing::{CreateCommand, TestAggregate, TestEvent, UpdateCommand};
     use crate::{
         es::inmemory::InMemoryPersist, es::EventStoreImpl, CqrsCommandEngine, CqrsContext,
-        EventStore,
+        EventEnvelope, EventStore,
     };
+    use futures::StreamExt;
 
     #[tokio::test]
     async fn test_create_aggregate() {
@@ -388,11 +389,18 @@ mod tests {
             .expect("Update should succeed");
 
         // Verify via stored events
-        let events = engine
+        let event_stream = engine
             .store
             .load_events(&aggregate_id)
             .await
             .expect("Event loading should succeed");
+
+        let events: Vec<EventEnvelope<TestAggregate>> = event_stream
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .expect("Events should be valid");
 
         assert_eq!(events.len(), 2, "There should be two events");
         assert_eq!(
@@ -437,11 +445,18 @@ mod tests {
             .expect("Second update should succeed");
 
         // Verification
-        let events = engine
+        let event_stream = engine
             .store
             .load_events(&aggregate_id)
             .await
             .expect("Event loading should succeed");
+
+        let events: Vec<EventEnvelope<TestAggregate>> = event_stream
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .expect("Events should be valid");
 
         assert_eq!(events.len(), 3, "There should be three events");
         assert_eq!(

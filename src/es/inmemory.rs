@@ -1,8 +1,9 @@
-use crate::es::storage::EventStoreStorage;
+use crate::es::storage::{EventStoreStorage, EventStream};
 use crate::{Aggregate, AggregateError, EventEnvelope, Snapshot};
+use futures::lock::{Mutex, OwnedMutexGuard};
+use futures::stream;
 use std::collections::HashMap;
 use std::sync::Arc;
-use futures::lock::{Mutex, OwnedMutexGuard};
 
 #[derive(Clone, Debug, Default)]
 pub struct InMemoryPersist<A>
@@ -27,7 +28,7 @@ where
 #[async_trait::async_trait]
 impl<A> EventStoreStorage<A> for InMemoryPersist<A>
 where
-    A: Aggregate,
+    A: Aggregate + 'static,
 {
     type Session = (
         OwnedMutexGuard<HashMap<String, Snapshot<A>>>,
@@ -56,23 +57,33 @@ where
         &self,
         aggregate_id: &str,
         version: usize,
-    ) -> Result<Vec<EventEnvelope<A>>, AggregateError> {
+    ) -> Result<EventStream<A>, AggregateError> {
         let journal = self.journal.lock().await;
         let items = journal.get(aggregate_id).cloned().unwrap_or_default();
-        Ok(items
-            .iter()
-            .filter(|v| v.version > version)
-            .cloned()
-            .collect())
+        let events: Vec<EventEnvelope<A>> =
+            items.into_iter().filter(|v| v.version > version).collect();
+        Ok(Box::pin(stream::iter(events.into_iter().map(Ok))))
     }
 
-    async fn fetch_all_events(
-        &self,
-        aggregate_id: &str,
-    ) -> Result<Vec<EventEnvelope<A>>, AggregateError> {
+    async fn fetch_all_events(&self, aggregate_id: &str) -> Result<EventStream<A>, AggregateError> {
         let journal = self.journal.lock().await;
         let items = journal.get(aggregate_id).cloned().unwrap_or_default();
-        Ok(items)
+        Ok(Box::pin(stream::iter(items.into_iter().map(Ok))))
+    }
+
+    async fn fetch_events_paged(
+        &self,
+        aggregate_id: &str,
+        page: usize,
+        page_size: usize,
+    ) -> Result<(Vec<EventEnvelope<A>>, i64), AggregateError> {
+        let journal = self.journal.lock().await;
+        let items = journal.get(aggregate_id).cloned().unwrap_or_default();
+        let total = items.len() as i64;
+        let offset = (page.max(1) - 1) * page_size;
+        let events: Vec<EventEnvelope<A>> =
+            items.into_iter().skip(offset).take(page_size).collect();
+        Ok((events, total))
     }
 
     async fn fetch_latest_event(

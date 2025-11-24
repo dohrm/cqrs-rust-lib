@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 #[derive(Debug, Clone)]
 pub struct CqrsContext {
     current_user: Option<String>,
+    metadata: Option<serde_json::Value>,
     request_id: String,
     now: DateTime<Utc>,
     rand_bytes: Option<[u8; 16]>,
@@ -12,6 +13,7 @@ impl CqrsContext {
     pub fn new(current_user: Option<String>) -> Self {
         Self {
             current_user,
+            metadata: None,
             request_id: "".to_string(),
             now: Utc::now(),
             rand_bytes: None,
@@ -32,6 +34,24 @@ impl CqrsContext {
             ..self
         }
     }
+
+    pub fn with_request_id(self, request_id: String) -> Self {
+        Self { request_id, ..self }
+    }
+
+    pub fn with_metadata(mut self, metadata: serde_json::Value) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
+    pub fn metadata(&self, key: Option<&str>) -> Option<serde_json::Value> {
+        if let Some(key) = key {
+            self.metadata.as_ref().and_then(|v| v.get(key).cloned())
+        } else {
+            self.metadata.clone()
+        }
+    }
+
     pub fn now(&self) -> DateTime<Utc> {
         self.now
     }

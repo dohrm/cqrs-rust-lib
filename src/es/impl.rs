@@ -1,4 +1,4 @@
-use crate::es::storage::EventStoreStorage;
+use crate::es::storage::{EventStoreStorage, EventStream};
 use crate::{Aggregate, AggregateError, CqrsContext, EventEnvelope, EventStore, Snapshot};
 use std::collections::HashMap;
 use tracing::{debug, error, info};
@@ -6,7 +6,7 @@ use tracing::{debug, error, info};
 #[derive(Debug, Clone)]
 pub struct EventStoreImpl<A, P>
 where
-    A: Aggregate,
+    A: Aggregate + 'static,
     P: EventStoreStorage<A>,
 {
     _phantom: std::marker::PhantomData<(A, P)>,
@@ -15,7 +15,7 @@ where
 
 impl<A, P> EventStoreImpl<A, P>
 where
-    A: Aggregate,
+    A: Aggregate + 'static,
     P: EventStoreStorage<A>,
 {
     #[must_use]
@@ -30,7 +30,7 @@ where
 #[async_trait::async_trait]
 impl<A, P> EventStore<A> for EventStoreImpl<A, P>
 where
-    A: Aggregate,
+    A: Aggregate + 'static,
     P: EventStoreStorage<A>,
 {
     async fn load_snapshot(
@@ -58,39 +58,28 @@ where
         &self,
         aggregate_id: &str,
         version: usize,
-    ) -> Result<Vec<EventEnvelope<A>>, AggregateError> {
+    ) -> Result<EventStream<A>, AggregateError> {
         debug!("Loading events from version");
-        match self
-            .persist
+        self.persist
             .fetch_events_from_version(aggregate_id, version)
             .await
-        {
-            Ok(events) => {
-                info!(event_count = events.len(), "Events loaded successfully");
-                Ok(events)
-            }
-            Err(e) => {
-                error!(error = %e, "Failed to load events from version");
-                Err(e)
-            }
-        }
     }
 
-    async fn load_events(
+    async fn load_events(&self, aggregate_id: &str) -> Result<EventStream<A>, AggregateError> {
+        debug!("Loading all events for aggregate");
+        self.persist.fetch_all_events(aggregate_id).await
+    }
+
+    async fn load_events_paged(
         &self,
         aggregate_id: &str,
-    ) -> Result<Vec<EventEnvelope<A>>, AggregateError> {
-        debug!("Loading all events for aggregate");
-        match self.persist.fetch_all_events(aggregate_id).await {
-            Ok(events) => {
-                info!(event_count = events.len(), "All events loaded successfully");
-                Ok(events)
-            }
-            Err(e) => {
-                error!(error = %e, "Failed to load all events");
-                Err(e)
-            }
-        }
+        page: usize,
+        page_size: usize,
+    ) -> Result<(Vec<EventEnvelope<A>>, i64), AggregateError> {
+        debug!("Loading paged events for aggregate");
+        self.persist
+            .fetch_events_paged(aggregate_id, page, page_size)
+            .await
     }
 
     async fn commit(

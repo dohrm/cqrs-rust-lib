@@ -12,7 +12,7 @@ use cqrs_rust_lib::dispatchers::ViewDispatcher;
 use cqrs_rust_lib::es::mongodb::MongoDBPersist;
 use cqrs_rust_lib::es::EventStoreImpl;
 use cqrs_rust_lib::read::mongodb::{MongoDBFromSnapshotStorage, MongoDbStorage};
-use cqrs_rust_lib::rest::{CQRSReadRouter, CQRSWriteRouter};
+use cqrs_rust_lib::rest::{CQRSAuditLogRouter, CQRSReadRouter, CQRSWriteRouter};
 use cqrs_rust_lib::{Aggregate, CqrsCommandEngine, CqrsContext, Dispatcher, Snapshot};
 use http::header::CONTENT_TYPE;
 use http::StatusCode;
@@ -135,7 +135,7 @@ pub async fn start(config: AppConfig) -> Result<(), Box<dyn std::error::Error + 
     let accounts_event_store = EventStoreImpl::new(account_es_store);
     let accounts_effects: Vec<Box<dyn Dispatcher<Account>>> = vec![Box::new(movement_dispatcher)];
     let accounts_engine = Arc::new(CqrsCommandEngine::new(
-        accounts_event_store,
+        accounts_event_store.clone(),
         accounts_effects,
         (),
         Box::new(|e| {
@@ -147,6 +147,7 @@ pub async fn start(config: AppConfig) -> Result<(), Box<dyn std::error::Error + 
     let accounts_read_router = CQRSReadRouter::routes(account_repository, Account::TYPE);
     let movements_read_router = CQRSReadRouter::routes(movement_repository, Account::TYPE);
     let accounts_write_router = CQRSWriteRouter::routes(accounts_engine);
+    let audit_router = CQRSAuditLogRouter::routes(accounts_event_store, Account::TYPE);
 
     // Prepare router
     let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
@@ -159,6 +160,7 @@ pub async fn start(config: AppConfig) -> Result<(), Box<dyn std::error::Error + 
         .nest(ACCOUNTS_PATH, accounts_read_router)
         .nest(ACCOUNTS_PATH, movements_read_router)
         .nest(ACCOUNTS_PATH, accounts_write_router)
+        .nest(ACCOUNTS_PATH, audit_router)
         .split_for_parts();
 
     let router = router

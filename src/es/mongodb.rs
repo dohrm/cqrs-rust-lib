@@ -1,8 +1,8 @@
 use crate::errors::AggregateError;
-use crate::es::storage::EventStoreStorage;
+use crate::es::storage::{EventStoreStorage, EventStream};
 use crate::snapshot::Snapshot;
 use crate::{Aggregate, EventEnvelope};
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use mongodb::bson::doc;
 use mongodb::{ClientSession, Database};
 
@@ -75,7 +75,7 @@ where
 #[async_trait::async_trait]
 impl<A> EventStoreStorage<A> for MongoDBPersist<A>
 where
-    A: Aggregate,
+    A: Aggregate + 'static,
 {
     type Session = ClientSession;
     async fn start_session(&self) -> Result<Self::Session, AggregateError> {
@@ -107,37 +107,59 @@ where
         &self,
         aggregate_id: &str,
         version: usize,
-    ) -> Result<Vec<EventEnvelope<A>>, AggregateError> {
-        let mut cursor = self
+    ) -> Result<EventStream<A>, AggregateError> {
+        let cursor = self
             .journal_collection(None)
             .find(doc! {"aggregateId": aggregate_id, "version": {"$gt": version as i64}})
             .await
             .map_err(map_mongo_error)?;
 
-        let mut result = Vec::new();
-
-        while let Some(next) = cursor.try_next().await.map_err(map_mongo_error)? {
-            result.push(next);
-        }
-        Ok(result)
+        Ok(Box::pin(cursor.map(|result| {
+            result.map_err(|e| AggregateError::DatabaseError(e.into()))
+        })))
     }
 
-    async fn fetch_all_events(
-        &self,
-        aggregate_id: &str,
-    ) -> Result<Vec<EventEnvelope<A>>, AggregateError> {
-        let mut cursor = self
+    async fn fetch_all_events(&self, aggregate_id: &str) -> Result<EventStream<A>, AggregateError> {
+        let cursor = self
             .journal_collection(None)
             .find(doc! {"aggregateId": aggregate_id})
             .await
             .map_err(map_mongo_error)?;
-        let mut result = Vec::new();
 
+        Ok(Box::pin(cursor.map(|result| {
+            result.map_err(|e| AggregateError::DatabaseError(e.into()))
+        })))
+    }
+
+    async fn fetch_events_paged(
+        &self,
+        aggregate_id: &str,
+        page: usize,
+        page_size: usize,
+    ) -> Result<(Vec<EventEnvelope<A>>, i64), AggregateError> {
+        // Get total count
+        let total = self
+            .journal_collection(None)
+            .count_documents(doc! {"aggregateId": aggregate_id})
+            .await
+            .map_err(map_mongo_error)?;
+
+        // Get paginated events
+        let offset = ((page.max(1) - 1) * page_size) as u64;
+        let mut cursor = self
+            .journal_collection(None)
+            .find(doc! {"aggregateId": aggregate_id})
+            .skip(offset)
+            .limit(page_size as i64)
+            .await
+            .map_err(map_mongo_error)?;
+
+        let mut events = Vec::new();
         while let Some(next) = cursor.try_next().await.map_err(map_mongo_error)? {
-            result.push(next);
+            events.push(next);
         }
 
-        Ok(result)
+        Ok((events, total as i64))
     }
 
     async fn fetch_latest_event(

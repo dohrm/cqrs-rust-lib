@@ -10,7 +10,7 @@ use axum::{middleware, Json, Router};
 use cqrs_rust_lib::es::postgres::PostgresPersist;
 use cqrs_rust_lib::es::EventStoreImpl;
 use cqrs_rust_lib::read::postgres::{PostgresFromSnapshotStorage, PostgresStorage};
-use cqrs_rust_lib::rest::{CQRSReadRouter, CQRSWriteRouter};
+use cqrs_rust_lib::rest::{CQRSAuditLogRouter, CQRSReadRouter, CQRSWriteRouter};
 use cqrs_rust_lib::{Aggregate, CqrsCommandEngine, CqrsContext, Dispatcher};
 use http::header::CONTENT_TYPE;
 use http::StatusCode;
@@ -136,7 +136,7 @@ pub async fn start(config: AppConfig) -> Result<(), Box<dyn std::error::Error + 
     let event_store = EventStoreImpl::new(es_store);
     let effects: Vec<Box<dyn Dispatcher<TodoList>>> = vec![];
     let engine = Arc::new(CqrsCommandEngine::new(
-        event_store,
+        event_store.clone(),
         effects,
         (),
         Box::new(|e| {
@@ -147,6 +147,7 @@ pub async fn start(config: AppConfig) -> Result<(), Box<dyn std::error::Error + 
     // Routers
     let read_router = CQRSReadRouter::routes(repository, TodoList::TYPE);
     let write_router = CQRSWriteRouter::routes(engine);
+    let audit_router = CQRSAuditLogRouter::routes(event_store, TodoList::TYPE);
 
     // Prepare router
     let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
@@ -157,6 +158,7 @@ pub async fn start(config: AppConfig) -> Result<(), Box<dyn std::error::Error + 
         )
         .nest(LISTS_PATH, read_router)
         .nest(LISTS_PATH, write_router)
+        .nest(LISTS_PATH, audit_router)
         .split_for_parts();
 
     let router = router

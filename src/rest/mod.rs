@@ -1,9 +1,11 @@
+mod audit_log_router;
 mod helpers;
 mod read_router;
 
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use http::StatusCode;
+pub use audit_log_router::*;
 pub use read_router::*;
 use serde_json::json;
 mod write_router;

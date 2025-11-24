@@ -1,6 +1,8 @@
 use crate::errors::AggregateError;
+use crate::es::storage::EventStream;
 use crate::snapshot::Snapshot;
 use crate::{Aggregate, CqrsContext, EventEnvelope};
+use futures::StreamExt;
 use http::StatusCode;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -8,7 +10,7 @@ use std::fmt::Debug;
 #[async_trait::async_trait]
 pub trait EventStore<A>: Debug + Clone + Sync + Send
 where
-    A: Aggregate,
+    A: Aggregate + 'static,
 {
     async fn load_snapshot(
         &self,
@@ -19,12 +21,16 @@ where
         &self,
         aggregate_id: &str,
         version: usize,
-    ) -> Result<Vec<EventEnvelope<A>>, AggregateError>;
+    ) -> Result<EventStream<A>, AggregateError>;
 
-    async fn load_events(
+    async fn load_events(&self, aggregate_id: &str) -> Result<EventStream<A>, AggregateError>;
+
+    async fn load_events_paged(
         &self,
         aggregate_id: &str,
-    ) -> Result<Vec<EventEnvelope<A>>, AggregateError>;
+        page: usize,
+        page_size: usize,
+    ) -> Result<(Vec<EventEnvelope<A>>, i64), AggregateError>;
 
     async fn initialize_aggregate(&self, aggregate_id: &str) -> Result<(A, usize), AggregateError> {
         let maybe_snapshot = self.load_snapshot(aggregate_id).await?;
@@ -48,8 +54,9 @@ where
         let version = snapshot.version;
 
         let mut latest_version = version;
-        let latest_events = self.load_events_from_version(aggregate_id, version).await?;
-        for event in latest_events {
+        let mut event_stream = self.load_events_from_version(aggregate_id, version).await?;
+        while let Some(event) = event_stream.next().await {
+            let event = event?;
             agg.apply(event.payload)
                 .map_err(|e| AggregateError::UserError(e.into()))?;
             latest_version = event.version;
