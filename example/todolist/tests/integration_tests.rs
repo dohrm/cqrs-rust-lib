@@ -3,6 +3,7 @@ mod integration_tests {
     use cqrs_rust_lib::es::storage::EventStoreStorage;
     use cqrs_rust_lib::es::EventStoreImpl;
     use cqrs_rust_lib::CqrsContext;
+    use std::fmt::Debug;
     use std::sync::Arc;
     use todolist::todolist::{CreateCommands, TodoList, UpdateCommands};
 
@@ -54,7 +55,7 @@ mod integration_tests {
 
     async fn testcases<P>(store: P)
     where
-        P: EventStoreStorage<TodoList>,
+        P: EventStoreStorage<TodoList> + Send + Sync + Clone + Debug + 'static,
     {
         let event_store = EventStoreImpl::new(store);
         let engine =

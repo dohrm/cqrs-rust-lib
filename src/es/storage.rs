@@ -1,13 +1,12 @@
 use crate::{Aggregate, AggregateError, EventEnvelope, Snapshot};
 use futures::stream::Stream;
-use std::fmt::Debug;
 use std::pin::Pin;
 
 pub type EventStream<A> =
     Pin<Box<dyn Stream<Item = Result<EventEnvelope<A>, AggregateError>> + Send>>;
 
 #[async_trait::async_trait]
-pub trait EventStoreStorage<A>: Clone + Debug + Send + Sync
+pub trait EventStoreStorage<A>
 where
     A: Aggregate + 'static,
 {

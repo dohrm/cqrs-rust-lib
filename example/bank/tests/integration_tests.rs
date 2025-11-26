@@ -1,11 +1,12 @@
 #[cfg(test)]
 mod integration_tests {
+    use bank::account::{Account, CreateCommands, UpdateCommands};
     use cqrs_rust_lib::es::storage::EventStoreStorage;
     use cqrs_rust_lib::es::EventStoreImpl;
     use cqrs_rust_lib::CqrsContext;
-    use bank::account::{Account, CreateCommands, UpdateCommands};
     use mongodb::{Client, Database};
     use std::env;
+    use std::fmt::Debug;
 
     async fn setup_test_db() -> Database {
         let mongodb_uri = env::var("MONGODB_TEST_URI")
@@ -20,7 +21,7 @@ mod integration_tests {
 
     async fn testcases<P>(store: P)
     where
-        P: EventStoreStorage<Account>,
+        P: EventStoreStorage<Account> + Send + Sync + Clone + Debug + 'static,
     {
         let event_store = EventStoreImpl::new(store);
         let engine =

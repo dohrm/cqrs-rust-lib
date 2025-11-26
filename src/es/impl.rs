@@ -1,13 +1,15 @@
 use crate::es::storage::{EventStoreStorage, EventStream};
 use crate::{Aggregate, AggregateError, CqrsContext, EventEnvelope, EventStore, Snapshot};
 use std::collections::HashMap;
+use std::fmt::Debug;
+use std::sync::Arc;
 use tracing::{debug, error, info};
 
 #[derive(Debug, Clone)]
 pub struct EventStoreImpl<A, P>
 where
     A: Aggregate + 'static,
-    P: EventStoreStorage<A>,
+    P: EventStoreStorage<A> + Send + Sync + Clone + Debug + 'static,
 {
     _phantom: std::marker::PhantomData<(A, P)>,
     persist: P,
@@ -16,14 +18,14 @@ where
 impl<A, P> EventStoreImpl<A, P>
 where
     A: Aggregate + 'static,
-    P: EventStoreStorage<A>,
+    P: EventStoreStorage<A> + Send + Sync + Clone + Debug + 'static,
 {
     #[must_use]
-    pub fn new(persist: P) -> Self {
-        Self {
+    pub fn new(persist: P) -> Arc<Self> {
+        Arc::new(Self {
             _phantom: Default::default(),
             persist,
-        }
+        })
     }
 }
 
@@ -31,7 +33,7 @@ where
 impl<A, P> EventStore<A> for EventStoreImpl<A, P>
 where
     A: Aggregate + 'static,
-    P: EventStoreStorage<A>,
+    P: EventStoreStorage<A> + Send + Sync + Clone + Debug + 'static,
 {
     async fn load_snapshot(
         &self,

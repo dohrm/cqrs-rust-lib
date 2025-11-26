@@ -5,10 +5,12 @@ use crate::{Aggregate, CqrsContext, EventEnvelope};
 use futures::StreamExt;
 use http::StatusCode;
 use std::collections::HashMap;
-use std::fmt::Debug;
+use std::sync::Arc;
+
+pub type DynEventStore<A> = Arc<dyn EventStore<A> + Send + Sync + 'static>;
 
 #[async_trait::async_trait]
-pub trait EventStore<A>: Debug + Clone + Sync + Send
+pub trait EventStore<A>
 where
     A: Aggregate + 'static,
 {

@@ -1,5 +1,4 @@
 use crate::engine::CqrsCommandEngine;
-use crate::event_store::EventStore;
 use crate::rest::helpers;
 use crate::rest::helpers::SchemaData;
 use crate::{Aggregate, AggregateError, CqrsContext};
@@ -25,28 +24,26 @@ pub struct CreationResult {
 pub struct UpdateResult;
 
 #[derive(Clone)]
-pub struct CQRSWriteRouter<A, ES>
+pub struct CQRSWriteRouter<A>
 where
     A: Aggregate + ToSchema + 'static,
-    ES: EventStore<A>,
 {
-    engine: Arc<CqrsCommandEngine<A, ES>>,
+    engine: Arc<CqrsCommandEngine<A>>,
 }
 
-impl<A, ES> CQRSWriteRouter<A, ES>
+impl<A> CQRSWriteRouter<A>
 where
     A: Aggregate + ToSchema + 'static,
-    ES: EventStore<A> + 'static,
 {
     #[must_use]
-    fn new(engine: Arc<CqrsCommandEngine<A, ES>>) -> Self {
+    fn new(engine: Arc<CqrsCommandEngine<A>>) -> Self {
         Self { engine }
     }
 
-    pub fn routes(engine: Arc<CqrsCommandEngine<A, ES>>) -> OpenApiRouter {
+    pub fn routes(engine: Arc<CqrsCommandEngine<A>>) -> OpenApiRouter {
         let context = CQRSWriteRouter::new(engine);
 
-        let mut result = OpenApiRouter::<CQRSWriteRouter<A, ES>>::new();
+        let mut result = OpenApiRouter::<CQRSWriteRouter<A>>::new();
         let mut base_schema = vec![];
         A::schemas(&mut base_schema);
 
@@ -81,11 +78,11 @@ where
             );
 
             let current_discriminator = discriminator.clone();
-            result = result.routes(UtoipaMethodRouter::<CQRSWriteRouter<A, ES>>::from((
+            result = result.routes(UtoipaMethodRouter::<CQRSWriteRouter<A>>::from((
                 schemas,
                 paths,
                 post(
-                    move |State(router): State<CQRSWriteRouter<A, ES>>,
+                    move |State(router): State<CQRSWriteRouter<A>>,
                           Extension(context): Extension<CqrsContext>,
                           Json(command): Json<Value>| async {
                         Self::create(router, command, current_discriminator, context).await
@@ -126,11 +123,11 @@ where
             );
 
             let current_discriminator = discriminator.clone();
-            result = result.routes(UtoipaMethodRouter::<CQRSWriteRouter<A, ES>>::from((
+            result = result.routes(UtoipaMethodRouter::<CQRSWriteRouter<A>>::from((
                 schemas.clone(),
                 paths,
                 put(
-                    move |State(router): State<CQRSWriteRouter<A, ES>>,
+                    move |State(router): State<CQRSWriteRouter<A>>,
                           Path(id): Path<String>,
                           Extension(context): Extension<CqrsContext>,
                           Json(command): Json<Value>| async {
@@ -151,7 +148,7 @@ where
     }
 
     pub async fn create(
-        router: CQRSWriteRouter<A, ES>,
+        router: CQRSWriteRouter<A>,
         mut command: Value,
         discriminator: Option<(String, String)>,
         context: CqrsContext,
@@ -176,7 +173,7 @@ where
     }
 
     pub async fn update(
-        router: CQRSWriteRouter<A, ES>,
+        router: CQRSWriteRouter<A>,
         id: String,
         mut command: Value,
         discriminator: Option<(String, String)>,

@@ -1,4 +1,4 @@
-use crate::read::storage::Storage;
+use crate::read::storage::DynStorage;
 use crate::read::Paged;
 use crate::rest::helpers;
 use crate::{Aggregate, CqrsContext, View};
@@ -10,33 +10,30 @@ use http::StatusCode;
 use serde::de::DeserializeOwned;
 use serde_json::json;
 use std::fmt::Debug;
-use std::sync::Arc;
 use utoipa::openapi::path::ParameterIn;
 use utoipa::openapi::{HttpMethod, Ref, RefOr, Schema};
 use utoipa::{IntoParams, PartialSchema, ToSchema};
 use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouter};
 
 #[derive(Clone)]
-pub struct CQRSReadRouter<A, V, S, Q>
+pub struct CQRSReadRouter<A, V, Q>
 where
     A: Aggregate,
     V: View<A> + ToSchema,
     Q: Clone + Debug + DeserializeOwned + Send + Sync + IntoParams,
-    S: Storage<V, Q>,
 {
     _phantom: std::marker::PhantomData<(A, V, Q)>,
-    storage: Arc<S>,
+    storage: DynStorage<V, Q>,
 }
 
-impl<A, V, S, Q> CQRSReadRouter<A, V, S, Q>
+impl<A, V, Q> CQRSReadRouter<A, V, Q>
 where
     A: Aggregate + 'static,
     V: View<A> + ToSchema + 'static,
     Q: Clone + Debug + DeserializeOwned + Send + Sync + IntoParams + 'static,
-    S: Storage<V, Q> + 'static,
 {
     #[must_use]
-    fn new(storage: Arc<S>) -> Self {
+    fn new(storage: DynStorage<V, Q>) -> Self {
         Self {
             _phantom: std::marker::PhantomData,
             storage,
@@ -67,9 +64,9 @@ where
     }
 
     fn find_many(
-        router: OpenApiRouter<CQRSReadRouter<A, V, S, Q>>,
+        router: OpenApiRouter<CQRSReadRouter<A, V, Q>>,
         tag: &str,
-    ) -> OpenApiRouter<CQRSReadRouter<A, V, S, Q>> {
+    ) -> OpenApiRouter<CQRSReadRouter<A, V, Q>> {
         let path = Self::base_path();
         let response_schema_name = format!("{}_{}", Paged::<V>::name(), V::name());
         let schemas = vec![(response_schema_name.to_string(), Paged::<V>::schema())];
@@ -86,7 +83,7 @@ where
 
         let find_many_handler = if V::IS_CHILD_OF_AGGREGATE {
             get(
-                move |State(router): State<CQRSReadRouter<A, V, S, Q>>,
+                move |State(router): State<CQRSReadRouter<A, V, Q>>,
                       Path(parent_id): Path<String>,
                       Query(query): Query<Q>,
                       Extension(context): Extension<CqrsContext>| async {
@@ -95,7 +92,7 @@ where
             )
         } else {
             get(
-                move |State(router): State<CQRSReadRouter<A, V, S, Q>>,
+                move |State(router): State<CQRSReadRouter<A, V, Q>>,
                       Query(query): Query<Q>,
                       Extension(context): Extension<CqrsContext>| async {
                     Self::search(router, None, query, context).await
@@ -103,7 +100,7 @@ where
             )
         };
 
-        router.routes(UtoipaMethodRouter::<CQRSReadRouter<A, V, S, Q>>::from((
+        router.routes(UtoipaMethodRouter::<CQRSReadRouter<A, V, Q>>::from((
             schemas,
             paths,
             find_many_handler,
@@ -111,9 +108,9 @@ where
     }
 
     fn find_one(
-        router: OpenApiRouter<CQRSReadRouter<A, V, S, Q>>,
+        router: OpenApiRouter<CQRSReadRouter<A, V, Q>>,
         tag: &str,
-    ) -> OpenApiRouter<CQRSReadRouter<A, V, S, Q>> {
+    ) -> OpenApiRouter<CQRSReadRouter<A, V, Q>> {
         let path = Self::base_path();
         let response_schema_name = V::name();
         let schemas = vec![(response_schema_name.to_string(), V::schema())];
@@ -133,7 +130,7 @@ where
 
         let find_one_handler = if V::IS_CHILD_OF_AGGREGATE {
             get(
-                move |State(router): State<CQRSReadRouter<A, V, S, Q>>,
+                move |State(router): State<CQRSReadRouter<A, V, Q>>,
                       Path(parent_id): Path<String>,
                       Path(id): Path<String>,
                       Extension(context): Extension<CqrsContext>| async {
@@ -142,7 +139,7 @@ where
             )
         } else {
             get(
-                move |State(router): State<CQRSReadRouter<A, V, S, Q>>,
+                move |State(router): State<CQRSReadRouter<A, V, Q>>,
                       Path(id): Path<String>,
                       Extension(context): Extension<CqrsContext>| async {
                     Self::by_id(router, None, id, context).await
@@ -150,17 +147,17 @@ where
             )
         };
 
-        router.routes(UtoipaMethodRouter::<CQRSReadRouter<A, V, S, Q>>::from((
+        router.routes(UtoipaMethodRouter::<CQRSReadRouter<A, V, Q>>::from((
             schemas,
             paths,
             find_one_handler,
         )))
     }
 
-    pub fn routes(storage: Arc<S>, tag: &'static str) -> OpenApiRouter {
+    pub fn routes(storage: DynStorage<V, Q>, tag: &'static str) -> OpenApiRouter {
         let state = Self::new(storage);
 
-        let mut result = OpenApiRouter::<CQRSReadRouter<A, V, S, Q>>::new();
+        let mut result = OpenApiRouter::<CQRSReadRouter<A, V, Q>>::new();
         // Find many
         result = Self::find_many(result, tag);
         result = Self::find_one(result, tag);
@@ -169,7 +166,7 @@ where
     }
 
     async fn search(
-        router: CQRSReadRouter<A, V, S, Q>,
+        router: CQRSReadRouter<A, V, Q>,
         parent_id: Option<String>,
         query: Q,
         context: CqrsContext,
@@ -181,7 +178,7 @@ where
     }
 
     async fn by_id(
-        router: CQRSReadRouter<A, V, S, Q>,
+        router: CQRSReadRouter<A, V, Q>,
         parent_id: Option<String>,
         id: String,
         context: CqrsContext,

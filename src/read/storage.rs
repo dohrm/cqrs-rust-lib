@@ -3,6 +3,7 @@ use crate::{AggregateError, CqrsContext};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::fmt::Debug;
+use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
@@ -21,8 +22,9 @@ pub trait HasId {
     fn parent_id(&self) -> Option<&str>;
 }
 
+pub type DynStorage<V, Q> = Arc<dyn Storage<V, Q> + Send + Sync>;
 #[async_trait::async_trait]
-pub trait Storage<V, Q>: Clone + Debug + Send + Sync
+pub trait Storage<V, Q>
 where
     V: Debug + Clone + Default + Serialize + DeserializeOwned + Send + Sync,
     Q: Clone + Debug + DeserializeOwned + Send + Sync,

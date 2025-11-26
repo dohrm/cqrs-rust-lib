@@ -1,22 +1,20 @@
-use crate::read::storage::{HasId, Storage};
+use crate::read::storage::{DynStorage, HasId};
 use crate::{Aggregate, AggregateError, CqrsContext, Dispatcher, EventEnvelope, View};
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;
-use std::sync::Arc;
 
-pub struct ViewDispatcher<A, V, S, Q> {
-    _phantom: std::marker::PhantomData<(A, V, S, Q)>,
-    storage: Arc<S>,
+pub struct ViewDispatcher<A, V, Q> {
+    _phantom: std::marker::PhantomData<(A, V, Q)>,
+    storage: DynStorage<V, Q>,
 }
 
-impl<A, V, S, Q> ViewDispatcher<A, V, S, Q>
+impl<A, V, Q> ViewDispatcher<A, V, Q>
 where
     A: Aggregate,
     V: View<A> + HasId,
     Q: Clone + Debug + DeserializeOwned + Send + Sync,
-    S: Storage<V, Q>,
 {
-    pub fn new(storage: Arc<S>) -> Self {
+    pub fn new(storage: DynStorage<V, Q>) -> Self {
         Self {
             _phantom: std::marker::PhantomData,
             storage,
@@ -25,12 +23,11 @@ where
 }
 
 #[async_trait::async_trait]
-impl<A, V, Q, S> Dispatcher<A> for ViewDispatcher<A, V, S, Q>
+impl<A, V, Q> Dispatcher<A> for ViewDispatcher<A, V, Q>
 where
     A: Aggregate,
     V: View<A> + HasId,
     Q: Clone + Debug + DeserializeOwned + Send + Sync,
-    S: Storage<V, Q>,
 {
     async fn dispatch(
         &self,

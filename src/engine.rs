@@ -2,8 +2,7 @@ use crate::context::CqrsContext;
 use crate::denormalizer::Dispatcher;
 use crate::errors::AggregateError;
 use crate::event::Event;
-use crate::event_store::EventStore;
-use crate::{Aggregate, EventEnvelope};
+use crate::{Aggregate, DynEventStore, EventEnvelope};
 use std::collections::HashMap;
 use tracing::{debug, error, info};
 
@@ -44,25 +43,23 @@ use tracing::{debug, error, info};
 ///
 /// This struct facilitates the CQRS pattern by separating the responsibility of command handling
 /// from querying, while keeping event storage and dispatching modular and configurable.
-pub struct CqrsCommandEngine<A, ES>
+pub struct CqrsCommandEngine<A>
 where
     A: Aggregate + 'static,
-    ES: EventStore<A>,
 {
-    store: ES,
+    store: DynEventStore<A>,
     dispatchers: Vec<Box<dyn Dispatcher<A>>>,
     services: A::Services,
     error_handler: Box<dyn Fn(&AggregateError) + Send + Sync>,
 }
 
-impl<A, ES> CqrsCommandEngine<A, ES>
+impl<A> CqrsCommandEngine<A>
 where
     A: Aggregate + 'static,
-    ES: EventStore<A>,
 {
     #[must_use]
     pub fn new(
-        store: ES,
+        store: DynEventStore<A>,
         dispatchers: Vec<Box<dyn Dispatcher<A>>>,
         services: A::Services,
         error_handler: Box<dyn Fn(&AggregateError) + Send + Sync>,
@@ -331,11 +328,13 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::es::inmemory::InMemoryPersist;
+    use crate::es::EventStoreImpl;
     use crate::testing::{CreateCommand, TestAggregate, TestEvent, UpdateCommand};
-    use crate::{
-        es::inmemory::InMemoryPersist, es::EventStoreImpl, CqrsCommandEngine, CqrsContext,
-        EventEnvelope, EventStore,
-    };
+    use crate::CqrsCommandEngine;
+    use crate::CqrsContext;
+    use crate::EventEnvelope;
+    use crate::EventStore;
     use futures::StreamExt;
 
     #[tokio::test]

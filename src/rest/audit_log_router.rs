@@ -1,7 +1,7 @@
 use crate::event::Event;
 use crate::read::Paged;
 use crate::rest::helpers;
-use crate::{Aggregate, CqrsContext, EventEnvelope, EventStore};
+use crate::{Aggregate, CqrsContext, DynEventStore, EventEnvelope};
 use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
 use axum::routing::get;
@@ -53,22 +53,20 @@ fn default_page_size() -> usize {
 }
 
 #[derive(Clone)]
-pub struct CQRSAuditLogRouter<A, ES>
+pub struct CQRSAuditLogRouter<A>
 where
     A: Aggregate + 'static,
-    ES: EventStore<A>,
 {
     _phantom: std::marker::PhantomData<A>,
-    store: ES,
+    store: DynEventStore<A>,
 }
 
-impl<A, ES> CQRSAuditLogRouter<A, ES>
+impl<A> CQRSAuditLogRouter<A>
 where
     A: Aggregate + 'static,
-    ES: EventStore<A> + 'static,
 {
     #[must_use]
-    fn new(store: ES) -> Self {
+    fn new(store: DynEventStore<A>) -> Self {
         Self {
             _phantom: std::marker::PhantomData,
             store,
@@ -80,9 +78,9 @@ where
     }
 
     fn audit_log_route(
-        router: OpenApiRouter<CQRSAuditLogRouter<A, ES>>,
+        router: OpenApiRouter<CQRSAuditLogRouter<A>>,
         tag: &str,
-    ) -> OpenApiRouter<CQRSAuditLogRouter<A, ES>> {
+    ) -> OpenApiRouter<CQRSAuditLogRouter<A>> {
         let path = format!("/{{{}}}/audit", Self::path_aggregate_id_field());
         let response_schema_name = format!("Paged_{}_AuditLog", A::TYPE);
         let schemas = vec![(
@@ -101,7 +99,7 @@ where
         );
 
         let handler = get(
-            move |State(router): State<CQRSAuditLogRouter<A, ES>>,
+            move |State(router): State<CQRSAuditLogRouter<A>>,
                   Path(aggregate_id): Path<String>,
                   Query(query): Query<AuditLogQuery>,
                   Extension(_context): Extension<CqrsContext>| async move {
@@ -109,20 +107,20 @@ where
             },
         );
 
-        router.routes(UtoipaMethodRouter::<CQRSAuditLogRouter<A, ES>>::from((
+        router.routes(UtoipaMethodRouter::<CQRSAuditLogRouter<A>>::from((
             schemas, paths, handler,
         )))
     }
 
-    pub fn routes(store: ES, tag: &'static str) -> OpenApiRouter {
+    pub fn routes(store: DynEventStore<A>, tag: &'static str) -> OpenApiRouter {
         let state = Self::new(store);
-        let mut result = OpenApiRouter::<CQRSAuditLogRouter<A, ES>>::new();
+        let mut result = OpenApiRouter::<CQRSAuditLogRouter<A>>::new();
         result = Self::audit_log_route(result, tag);
         result.with_state(state)
     }
 
     async fn get_audit_log(
-        router: CQRSAuditLogRouter<A, ES>,
+        router: CQRSAuditLogRouter<A>,
         aggregate_id: String,
         query: AuditLogQuery,
     ) -> impl IntoResponse {
