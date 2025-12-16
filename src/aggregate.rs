@@ -10,6 +10,24 @@ use utoipa::ToSchema;
 #[async_trait::async_trait]
 pub trait Aggregate: Default + Debug + Clone + Serialize + DeserializeOwned + Sync + Send {
     const TYPE: &'static str;
+
+    #[cfg(feature = "utoipa")]
+    type Event: Event + ToSchema;
+    #[cfg(not(feature = "utoipa"))]
+    type Event: Event;
+
+    type Error: std::error::Error + Send + Sync + 'static;
+
+    fn aggregate_id(&self) -> String;
+    fn with_aggregate_id(self, id: String) -> Self;
+
+    fn apply(&mut self, event: Self::Event) -> Result<(), Self::Error>;
+
+    fn error(status: StatusCode, details: &str) -> Self::Error;
+}
+
+#[async_trait::async_trait]
+pub trait CommandHandler: Aggregate {
     #[cfg(feature = "utoipa")]
     type CreateCommand: DeserializeOwned + Sync + Send + ToSchema;
     #[cfg(not(feature = "utoipa"))]
@@ -20,16 +38,7 @@ pub trait Aggregate: Default + Debug + Clone + Serialize + DeserializeOwned + Sy
     #[cfg(not(feature = "utoipa"))]
     type UpdateCommand: DeserializeOwned + Sync + Send;
 
-    #[cfg(feature = "utoipa")]
-    type Event: Event + ToSchema;
-    #[cfg(not(feature = "utoipa"))]
-    type Event: Event;
-
     type Services: Send + Sync;
-    type Error: std::error::Error + Send + Sync + 'static;
-
-    fn aggregate_id(&self) -> String;
-    fn with_aggregate_id(self, id: String) -> Self;
 
     async fn handle_create(
         &self,
@@ -44,8 +53,4 @@ pub trait Aggregate: Default + Debug + Clone + Serialize + DeserializeOwned + Sy
         services: &Self::Services,
         context: &CqrsContext,
     ) -> Result<Vec<Self::Event>, Self::Error>;
-
-    fn apply(&mut self, event: Self::Event) -> Result<(), Self::Error>;
-
-    fn error(status: StatusCode, details: &str) -> Self::Error;
 }

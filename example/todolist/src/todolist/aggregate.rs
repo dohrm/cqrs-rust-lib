@@ -1,6 +1,6 @@
 use super::commands::{CreateCommands, UpdateCommands};
 use super::events::Events;
-use cqrs_rust_lib::{Aggregate, CqrsContext, EventEnvelope, View};
+use cqrs_rust_lib::{Aggregate, CommandHandler, CqrsContext, EventEnvelope, View};
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -26,48 +26,16 @@ pub struct Todo {
 impl Aggregate for TodoList {
     const TYPE: &'static str = AGGREGATE_TYPE;
 
-    type CreateCommand = CreateCommands;
-    type UpdateCommand = UpdateCommands;
     type Event = Events;
-    type Services = ();
     type Error = std::io::Error;
 
     fn aggregate_id(&self) -> String {
         self.id.clone()
     }
+
     fn with_aggregate_id(mut self, id: String) -> Self {
         self.id = id;
         self
-    }
-
-    async fn handle_create(
-        &self,
-        command: Self::CreateCommand,
-        _services: &Self::Services,
-        _context: &CqrsContext,
-    ) -> Result<Vec<Self::Event>, Self::Error> {
-        match command {
-            CreateCommands::Create { name } => Ok(vec![Events::TodoListCreated { name }]),
-        }
-    }
-
-    async fn handle_update(
-        &self,
-        command: Self::UpdateCommand,
-        _services: &Self::Services,
-        context: &CqrsContext,
-    ) -> Result<Vec<Self::Event>, Self::Error> {
-        match command {
-            UpdateCommands::AddTodo { title } => Ok(vec![Events::TodoAdded {
-                todo_id: context.next_uuid(),
-                title,
-            }]),
-            UpdateCommands::RemoveTodo { todo_id } => Ok(vec![Events::TodoRemoved { todo_id }]),
-            UpdateCommands::AssignTodo { todo_id, assignee } => {
-                Ok(vec![Events::TodoAssignedTo { todo_id, assignee }])
-            }
-            UpdateCommands::ResolveTodo { todo_id } => Ok(vec![Events::TodoResolved { todo_id }]),
-        }
     }
 
     fn apply(&mut self, event: Self::Event) -> Result<(), Self::Error> {
@@ -100,6 +68,43 @@ impl Aggregate for TodoList {
 
     fn error(_status: StatusCode, details: &str) -> Self::Error {
         std::io::Error::other(details.to_string())
+    }
+}
+
+#[async_trait::async_trait]
+impl CommandHandler for TodoList {
+    type CreateCommand = CreateCommands;
+    type UpdateCommand = UpdateCommands;
+    type Services = ();
+
+    async fn handle_create(
+        &self,
+        command: Self::CreateCommand,
+        _services: &Self::Services,
+        _context: &CqrsContext,
+    ) -> Result<Vec<Self::Event>, Self::Error> {
+        match command {
+            CreateCommands::Create { name } => Ok(vec![Events::TodoListCreated { name }]),
+        }
+    }
+
+    async fn handle_update(
+        &self,
+        command: Self::UpdateCommand,
+        _services: &Self::Services,
+        context: &CqrsContext,
+    ) -> Result<Vec<Self::Event>, Self::Error> {
+        match command {
+            UpdateCommands::AddTodo { title } => Ok(vec![Events::TodoAdded {
+                todo_id: context.next_uuid(),
+                title,
+            }]),
+            UpdateCommands::RemoveTodo { todo_id } => Ok(vec![Events::TodoRemoved { todo_id }]),
+            UpdateCommands::AssignTodo { todo_id, assignee } => {
+                Ok(vec![Events::TodoAssignedTo { todo_id, assignee }])
+            }
+            UpdateCommands::ResolveTodo { todo_id } => Ok(vec![Events::TodoResolved { todo_id }]),
+        }
     }
 }
 

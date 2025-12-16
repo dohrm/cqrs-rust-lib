@@ -78,7 +78,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Aggregate, CqrsContext, Event, ViewElements};
+    use crate::{Aggregate, Event, ViewElements};
     use chrono::Utc;
     use http::StatusCode;
     use serde::{Deserialize, Serialize};
@@ -125,19 +125,8 @@ mod tests {
     impl Aggregate for TestAggregate {
         const TYPE: &'static str = "TEST";
 
-        #[cfg(feature = "utoipa")]
-        type CreateCommand = ();
-        #[cfg(not(feature = "utoipa"))]
-        type CreateCommand = ();
-
-        #[cfg(feature = "utoipa")]
-        type UpdateCommand = ();
-        #[cfg(not(feature = "utoipa"))]
-        type UpdateCommand = ();
-
         type Event = TestEvent;
         type Error = TestError;
-        type Services = ();
 
         fn aggregate_id(&self) -> String {
             self.id.clone()
@@ -145,28 +134,6 @@ mod tests {
 
         fn with_aggregate_id(self, id: String) -> Self {
             Self { id, ..self }
-        }
-
-        async fn handle_create(
-            &self,
-            _command: Self::CreateCommand,
-            _services: &Self::Services,
-            _context: &CqrsContext,
-        ) -> Result<Vec<Self::Event>, Self::Error> {
-            Ok(vec![TestEvent::Created {
-                name: "Test".to_string(),
-            }])
-        }
-
-        async fn handle_update(
-            &self,
-            _command: Self::UpdateCommand,
-            _services: &Self::Services,
-            _context: &CqrsContext,
-        ) -> Result<Vec<Self::Event>, Self::Error> {
-            Ok(vec![TestEvent::Updated {
-                name: "Updated Test".to_string(),
-            }])
         }
 
         fn apply(&mut self, event: Self::Event) -> Result<(), Self::Error> {

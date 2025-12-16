@@ -1,7 +1,7 @@
 use crate::engine::CqrsCommandEngine;
 use crate::rest::helpers;
 use crate::rest::helpers::SchemaData;
-use crate::{Aggregate, AggregateError, CqrsContext};
+use crate::{Aggregate, AggregateError, CommandHandler, CqrsContext};
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use axum::routing::{post, put};
@@ -26,14 +26,14 @@ pub struct UpdateResult;
 #[derive(Clone)]
 pub struct CQRSWriteRouter<A>
 where
-    A: Aggregate + ToSchema + 'static,
+    A: Aggregate + CommandHandler + ToSchema + 'static,
 {
     engine: Arc<CqrsCommandEngine<A>>,
 }
 
 impl<A> CQRSWriteRouter<A>
 where
-    A: Aggregate + ToSchema + 'static,
+    A: Aggregate + CommandHandler + ToSchema + 'static,
 {
     #[must_use]
     fn new(engine: Arc<CqrsCommandEngine<A>>) -> Self {

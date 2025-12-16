@@ -1,6 +1,6 @@
 use crate::account::amount::Amount;
 use crate::account::{CreateCommands, Events, UpdateCommands};
-use cqrs_rust_lib::{Aggregate, CqrsContext, EventEnvelope, View};
+use cqrs_rust_lib::{Aggregate, CommandHandler, CqrsContext, EventEnvelope, View};
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::io::ErrorKind;
@@ -19,19 +19,44 @@ pub struct Account {
 impl Aggregate for Account {
     const TYPE: &'static str = AGGREGATE_TYPE;
 
-    type CreateCommand = CreateCommands;
-    type UpdateCommand = UpdateCommands;
     type Event = Events;
-    type Services = ();
     type Error = std::io::Error;
 
     fn aggregate_id(&self) -> String {
         self.id.clone()
     }
+
     fn with_aggregate_id(mut self, id: String) -> Self {
         self.id = id;
         self
     }
+
+    fn apply(&mut self, event: Self::Event) -> Result<(), Self::Error> {
+        match event {
+            Events::AccountCreated { owner } => {
+                self.owner = owner;
+            }
+            Events::Deposited { amount } => {
+                self.amount += amount;
+            }
+            Events::Withdrawn { amount } => {
+                self.amount -= amount;
+            }
+            Events::Closed => {}
+        }
+        Ok(())
+    }
+
+    fn error(_status: StatusCode, details: &str) -> Self::Error {
+        std::io::Error::new(ErrorKind::AddrInUse, details.to_string())
+    }
+}
+
+#[async_trait::async_trait]
+impl CommandHandler for Account {
+    type CreateCommand = CreateCommands;
+    type UpdateCommand = UpdateCommands;
+    type Services = ();
 
     async fn handle_create(
         &self,
@@ -71,26 +96,6 @@ impl Aggregate for Account {
             }
             UpdateCommands::Close => Ok(vec![Self::Event::Closed]),
         }
-    }
-
-    fn apply(&mut self, event: Self::Event) -> Result<(), Self::Error> {
-        match event {
-            Events::AccountCreated { owner } => {
-                self.owner = owner;
-            }
-            Events::Deposited { amount } => {
-                self.amount += amount;
-            }
-            Events::Withdrawn { amount } => {
-                self.amount -= amount;
-            }
-            Events::Closed => {}
-        }
-        Ok(())
-    }
-
-    fn error(_status: StatusCode, details: &str) -> Self::Error {
-        std::io::Error::new(ErrorKind::AddrInUse, details.to_string())
     }
 }
 

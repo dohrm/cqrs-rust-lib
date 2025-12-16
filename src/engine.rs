@@ -2,7 +2,7 @@ use crate::context::CqrsContext;
 use crate::denormalizer::Dispatcher;
 use crate::errors::AggregateError;
 use crate::event::Event;
-use crate::{Aggregate, DynEventStore, EventEnvelope};
+use crate::{Aggregate, CommandHandler, DynEventStore, EventEnvelope};
 use std::collections::HashMap;
 use tracing::{debug, error, info};
 
@@ -45,7 +45,7 @@ use tracing::{debug, error, info};
 /// from querying, while keeping event storage and dispatching modular and configurable.
 pub struct CqrsCommandEngine<A>
 where
-    A: Aggregate + 'static,
+    A: Aggregate + CommandHandler + 'static,
 {
     store: DynEventStore<A>,
     dispatchers: Vec<Box<dyn Dispatcher<A>>>,
@@ -55,7 +55,7 @@ where
 
 impl<A> CqrsCommandEngine<A>
 where
-    A: Aggregate + 'static,
+    A: Aggregate + CommandHandler + 'static,
 {
     #[must_use]
     pub fn new(
@@ -334,7 +334,6 @@ mod tests {
     use crate::CqrsCommandEngine;
     use crate::CqrsContext;
     use crate::EventEnvelope;
-    use crate::EventStore;
     use futures::StreamExt;
 
     #[tokio::test]

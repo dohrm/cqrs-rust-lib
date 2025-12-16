@@ -1,4 +1,4 @@
-use crate::{Aggregate, CqrsContext, EventEnvelope, View, ViewElements};
+use crate::{Aggregate, CommandHandler, CqrsContext, EventEnvelope, View, ViewElements};
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "utoipa")]
@@ -61,10 +61,9 @@ pub struct TestAggregate {
 #[async_trait::async_trait]
 impl Aggregate for TestAggregate {
     const TYPE: &'static str = "TEST";
-    type CreateCommand = CreateCommand;
-    type UpdateCommand = UpdateCommand;
+
     type Event = TestEvent;
-    type Services = ();
+
     type Error = TestError;
 
     fn aggregate_id(&self) -> String {
@@ -74,6 +73,27 @@ impl Aggregate for TestAggregate {
     fn with_aggregate_id(self, id: String) -> Self {
         Self { id, ..self }
     }
+
+    fn apply(&mut self, event: Self::Event) -> Result<(), Self::Error> {
+        match event {
+            TestEvent::Created { name } => self.name = name,
+            TestEvent::Updated { name } => self.name = name,
+            TestEvent::Incremented => self.counter += 1,
+            TestEvent::Decremented => self.counter -= 1,
+        }
+        Ok(())
+    }
+
+    fn error(_status: StatusCode, details: &str) -> Self::Error {
+        details.into()
+    }
+}
+
+#[async_trait::async_trait]
+impl CommandHandler for TestAggregate {
+    type CreateCommand = CreateCommand;
+    type UpdateCommand = UpdateCommand;
+    type Services = ();
 
     async fn handle_create(
         &self,
@@ -96,20 +116,6 @@ impl Aggregate for TestAggregate {
             UpdateCommand::Increment => Ok(vec![TestEvent::Incremented]),
             UpdateCommand::Decrement => Ok(vec![TestEvent::Decremented]),
         }
-    }
-
-    fn apply(&mut self, event: Self::Event) -> Result<(), Self::Error> {
-        match event {
-            TestEvent::Created { name } => self.name = name,
-            TestEvent::Updated { name } => self.name = name,
-            TestEvent::Incremented => self.counter += 1,
-            TestEvent::Decremented => self.counter -= 1,
-        }
-        Ok(())
-    }
-
-    fn error(_status: StatusCode, details: &str) -> Self::Error {
-        details.into()
     }
 }
 
