@@ -1,9 +1,8 @@
-use crate::errors::AggregateError;
+use crate::errors::CqrsError;
 use crate::es::storage::EventStream;
 use crate::snapshot::Snapshot;
 use crate::{Aggregate, CqrsContext, EventEnvelope};
 use futures::StreamExt;
-use http::StatusCode;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -17,39 +16,35 @@ where
     async fn load_snapshot(
         &self,
         aggregate_id: &str,
-    ) -> Result<Option<Snapshot<A>>, AggregateError>;
+    ) -> Result<Option<Snapshot<A>>, CqrsError>;
 
     async fn load_events_from_version(
         &self,
         aggregate_id: &str,
         version: usize,
-    ) -> Result<EventStream<A>, AggregateError>;
+    ) -> Result<EventStream<A>, CqrsError>;
 
-    async fn load_events(&self, aggregate_id: &str) -> Result<EventStream<A>, AggregateError>;
+    async fn load_events(&self, aggregate_id: &str) -> Result<EventStream<A>, CqrsError>;
 
     async fn load_events_paged(
         &self,
         aggregate_id: &str,
         page: usize,
         page_size: usize,
-    ) -> Result<(Vec<EventEnvelope<A>>, i64), AggregateError>;
+    ) -> Result<(Vec<EventEnvelope<A>>, i64), CqrsError>;
 
-    async fn initialize_aggregate(&self, aggregate_id: &str) -> Result<(A, usize), AggregateError> {
+    async fn initialize_aggregate(&self, aggregate_id: &str) -> Result<(A, usize), CqrsError> {
         let maybe_snapshot = self.load_snapshot(aggregate_id).await?;
-        if let Some(_snapshot) = maybe_snapshot {
-            return Err(AggregateError::UserError(
-                A::error(StatusCode::CONFLICT, "Aggregate already exists").into(),
-            ));
+        if maybe_snapshot.is_some() {
+            return Err(CqrsError::aggregate_already_exists(aggregate_id));
         }
         Ok((A::default().with_aggregate_id(aggregate_id.to_string()), 0))
     }
 
-    async fn load_aggregate(&self, aggregate_id: &str) -> Result<(A, usize), AggregateError> {
+    async fn load_aggregate(&self, aggregate_id: &str) -> Result<(A, usize), CqrsError> {
         let maybe_snapshot = self.load_snapshot(aggregate_id).await?;
         if maybe_snapshot.is_none() {
-            return Err(AggregateError::UserError(
-                A::error(StatusCode::NOT_FOUND, "Aggregate not found").into(),
-            ));
+            return Err(CqrsError::aggregate_not_found(aggregate_id));
         }
         let snapshot = maybe_snapshot.unwrap();
         let mut agg = snapshot.state;
@@ -60,7 +55,7 @@ where
         while let Some(event) = event_stream.next().await {
             let event = event?;
             agg.apply(event.payload)
-                .map_err(|e| AggregateError::UserError(e.into()))?;
+                .map_err(|e| CqrsError::user_error(e))?;
             latest_version = event.version;
         }
         Ok((agg, latest_version))
@@ -73,5 +68,5 @@ where
         metadata: HashMap<String, String>,
         version: usize,
         context: &CqrsContext,
-    ) -> Result<Vec<EventEnvelope<A>>, AggregateError>;
+    ) -> Result<Vec<EventEnvelope<A>>, CqrsError>;
 }

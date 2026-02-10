@@ -15,6 +15,12 @@ impl From<&str> for TestError {
     }
 }
 
+impl From<TestError> for crate::CqrsError {
+    fn from(e: TestError) -> Self {
+        crate::CqrsError::user_error(e)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "utoipa", derive(ToSchema))]
 pub enum CreateCommand {

@@ -12,4 +12,5 @@ pub use query::*;
 mod amount;
 pub use amount::*;
 
+pub mod errors;
 pub mod views;

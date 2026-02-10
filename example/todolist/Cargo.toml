@@ -20,5 +20,6 @@ tokio = { version = "^1.45.0", features = ["rt-multi-thread", "macros"] }
 tokio-postgres = { version = "0.7.12", features = ["with-serde_json-1", "with-chrono-0_4"] }
 serde_json = "1.0"
 
+thiserror = "2"
 # project
 cqrs-rust-lib = { path = "../..", features = ["utoipa", "postgres"] }

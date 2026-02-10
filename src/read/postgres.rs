@@ -1,6 +1,6 @@
 use crate::read::storage::{HasId, Storage, StorageError};
 use crate::read::Paged;
-use crate::{Aggregate, AggregateError, CqrsContext, Snapshot};
+use crate::{Aggregate, CqrsContext, CqrsError, Snapshot};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -11,8 +11,8 @@ use std::sync::Arc;
 #[cfg(feature = "postgres")]
 use tokio_postgres::{types::ToSql, Client};
 
-fn map_pg_error<E: std::error::Error + Send + Sync + 'static>(e: E) -> AggregateError {
-    AggregateError::DatabaseError(Box::new(e))
+fn map_pg_error<E: std::error::Error + Send + Sync + 'static>(e: E) -> CqrsError {
+    CqrsError::database_error(e)
 }
 
 #[derive(Debug, Clone)]
@@ -70,15 +70,15 @@ where
         &self,
         parent_id: &Option<String>,
         params: &mut Vec<Box<dyn ToSql + Sync + Send>>,
-    ) -> Result<Option<String>, AggregateError> {
+    ) -> Result<Option<String>, CqrsError> {
         match (V::parent_field_id(), parent_id) {
             (Some(_), Some(pid)) => {
                 params.push(Box::new(pid.clone()));
                 Ok(Some(format!("parent_id = ${}", params.len())))
             }
-            (Some(_), None) => Err(AggregateError::UserError(Box::new(
-                StorageError::MissingParentId,
-            ))),
+            (Some(_), None) => Err(CqrsError::validation(
+                StorageError::MissingParentId.to_string(),
+            )),
             _ => Ok(None),
         }
     }
@@ -100,7 +100,7 @@ where
         parent_id: Option<String>,
         query: Q,
         context: CqrsContext,
-    ) -> Result<Paged<V>, AggregateError> {
+    ) -> Result<Paged<V>, CqrsError> {
         let (mut where_sql, mut params) = self.query_builder.to_where(&query, &context);
         let parent_clause = self.build_parent_clause(&parent_id, &mut params)?;
         if let Some(pc) = parent_clause {
@@ -156,7 +156,7 @@ where
         for row in rows {
             let val: JsonValue = row.try_get::<_, JsonValue>("data").map_err(map_pg_error)?;
             let v: V = serde_json::from_value(val)
-                .map_err(|e| AggregateError::SerializationError(Box::new(e)))?;
+                .map_err(|e| CqrsError::serialization_error(e))?;
             items.push(v);
         }
         Ok(Paged {
@@ -176,16 +176,16 @@ where
         parent_id: Option<String>,
         id: &str,
         _context: CqrsContext,
-    ) -> Result<Option<V>, AggregateError> {
+    ) -> Result<Option<V>, CqrsError> {
         let mut where_sql = String::from("id = $1");
         let mut params: Vec<&(dyn ToSql + Sync)> = vec![&id];
         if let (Some(_), Some(pid)) = (V::parent_field_id(), parent_id.as_ref()) {
             where_sql.push_str(&format!(" AND parent_id = ${}", params.len() + 1));
             params.push(pid);
         } else if V::parent_field_id().is_some() && parent_id.is_none() {
-            return Err(AggregateError::UserError(Box::new(
-                StorageError::MissingParentId,
-            )));
+            return Err(CqrsError::validation(
+                StorageError::MissingParentId.to_string(),
+            ));
         }
         let sql = format!("SELECT data FROM {} WHERE {}", self.table_name, where_sql);
         let row = self
@@ -196,27 +196,27 @@ where
         if let Some(row) = row {
             let val: JsonValue = row.try_get::<_, JsonValue>("data").map_err(map_pg_error)?;
             let v: V = serde_json::from_value(val)
-                .map_err(|e| AggregateError::SerializationError(Box::new(e)))?;
+                .map_err(|e| CqrsError::serialization_error(e))?;
             Ok(Some(v))
         } else {
             Ok(None)
         }
     }
 
-    async fn save(&self, entity: V, _context: CqrsContext) -> Result<(), AggregateError> {
+    async fn save(&self, entity: V, _context: CqrsContext) -> Result<(), CqrsError> {
         let id = entity.id().to_string();
         let parent_id = entity.parent_id().map(|s| s.to_string());
         let data = serde_json::to_value(&entity)
-            .map_err(|e| AggregateError::SerializationError(Box::new(e)))?;
+            .map_err(|e| CqrsError::serialization_error(e))?;
         // Remove id key from data if exists (to keep canonical form in data column)
         let mut data_obj = data;
         if let Some(obj) = data_obj.as_object_mut() {
             obj.remove(V::field_id());
         }
         if V::parent_field_id().is_some() && parent_id.is_none() {
-            return Err(AggregateError::UserError(Box::new(
-                StorageError::MissingParentId,
-            )));
+            return Err(CqrsError::validation(
+                StorageError::MissingParentId.to_string(),
+            ));
         }
         let sql = format!(
             "INSERT INTO {} (id, parent_id, data) VALUES ($1, $2, $3) \
@@ -273,7 +273,7 @@ where
         parent_id: Option<String>,
         query: Q,
         context: CqrsContext,
-    ) -> Result<Paged<A>, AggregateError> {
+    ) -> Result<Paged<A>, CqrsError> {
         let result = self.inner.filter(parent_id, query, context).await?;
 
         Ok(Paged {
@@ -289,7 +289,7 @@ where
         parent_id: Option<String>,
         id: &str,
         context: CqrsContext,
-    ) -> Result<Option<A>, AggregateError> {
+    ) -> Result<Option<A>, CqrsError> {
         Ok(self
             .inner
             .find_by_id(parent_id, id, context)
@@ -297,9 +297,9 @@ where
             .map(|s| s.state))
     }
 
-    async fn save(&self, _entity: A, _context: CqrsContext) -> Result<(), AggregateError> {
-        Err(AggregateError::DatabaseError(Box::new(
+    async fn save(&self, _entity: A, _context: CqrsContext) -> Result<(), CqrsError> {
+        Err(CqrsError::database_error(
             StorageError::UnsupportedMethod("SnapshotStorage#save".to_string()),
-        )))
+        ))
     }
 }

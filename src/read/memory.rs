@@ -1,4 +1,4 @@
-use crate::{Aggregate, AggregateError, EventEnvelope, View};
+use crate::{Aggregate, CqrsError, EventEnvelope, View};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tracing::debug;
@@ -40,7 +40,7 @@ where
     }
 
     /// Updates a view with an event.
-    pub fn update_view(&self, event: &EventEnvelope<A>) -> Result<(), AggregateError> {
+    pub fn update_view(&self, event: &EventEnvelope<A>) -> Result<(), CqrsError> {
         debug!("Updating view with event");
 
         let view_id = V::view_id(event);

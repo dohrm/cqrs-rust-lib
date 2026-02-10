@@ -1,4 +1,4 @@
-use crate::errors::AggregateError;
+use crate::errors::CqrsError;
 use crate::es::storage::{EventStoreStorage, EventStream};
 use crate::snapshot::Snapshot;
 use crate::{Aggregate, EventEnvelope};
@@ -7,8 +7,8 @@ use serde_json::Value as JsonValue;
 use std::sync::Arc;
 use tokio_postgres::Client;
 
-fn map_pg_error<E: std::error::Error + Send + Sync + 'static>(e: E) -> AggregateError {
-    AggregateError::DatabaseError(Box::new(e))
+fn map_pg_error<E: std::error::Error + Send + Sync + 'static>(e: E) -> CqrsError {
+    CqrsError::database_error(e)
 }
 
 #[derive(Clone, Debug)]
@@ -52,7 +52,7 @@ where
     // Minimal session: we control transaction with BEGIN/COMMIT on the same client
     type Session = ();
 
-    async fn start_session(&self) -> Result<Self::Session, AggregateError> {
+    async fn start_session(&self) -> Result<Self::Session, CqrsError> {
         self.client
             .batch_execute("BEGIN")
             .await
@@ -60,7 +60,7 @@ where
         Ok(())
     }
 
-    async fn close_session(&self, _session: Self::Session) -> Result<(), AggregateError> {
+    async fn close_session(&self, _session: Self::Session) -> Result<(), CqrsError> {
         self.client
             .batch_execute("COMMIT")
             .await
@@ -70,7 +70,7 @@ where
     async fn fetch_snapshot(
         &self,
         aggregate_id: &str,
-    ) -> Result<Option<Snapshot<A>>, AggregateError> {
+    ) -> Result<Option<Snapshot<A>>, CqrsError> {
         let sql = format!(
             "SELECT data, version FROM {} WHERE aggregate_id = $1",
             self.snapshot_table_name
@@ -84,7 +84,7 @@ where
             let data: JsonValue = row.try_get("data").map_err(map_pg_error)?;
             let version: i64 = row.try_get("version").map_err(map_pg_error)?;
             let state: A = serde_json::from_value(data)
-                .map_err(|e| AggregateError::SerializationError(Box::new(e)))?;
+                .map_err(|e| CqrsError::serialization_error(e))?;
             Ok(Some(Snapshot::<A> {
                 aggregate_id: aggregate_id.to_string(),
                 state,
@@ -99,7 +99,7 @@ where
         &self,
         aggregate_id: &str,
         version: usize,
-    ) -> Result<EventStream<A>, AggregateError> {
+    ) -> Result<EventStream<A>, CqrsError> {
         let sql = format!(
             "SELECT event_id, aggregate_id, version, payload, metadata, at FROM {} WHERE aggregate_id = $1 AND version > $2 ORDER BY version ASC",
             self.journal_table_name
@@ -110,7 +110,7 @@ where
             .await
             .map_err(map_pg_error)?;
 
-        let events: Result<Vec<EventEnvelope<A>>, AggregateError> = rows
+        let events: Result<Vec<EventEnvelope<A>>, CqrsError> = rows
             .into_iter()
             .map(|row| {
                 let payload: JsonValue = row.try_get("payload").map_err(map_pg_error)?;
@@ -122,9 +122,9 @@ where
                         .map_err(map_pg_error)?,
                     version: row.try_get::<_, i64>("version").map_err(map_pg_error)? as usize,
                     payload: serde_json::from_value(payload)
-                        .map_err(|e| AggregateError::SerializationError(Box::new(e)))?,
+                        .map_err(|e| CqrsError::serialization_error(e))?,
                     metadata: serde_json::from_value(metadata)
-                        .map_err(|e| AggregateError::SerializationError(Box::new(e)))?,
+                        .map_err(|e| CqrsError::serialization_error(e))?,
                     at: row.try_get("at").map_err(map_pg_error)?,
                 })
             })
@@ -134,7 +134,7 @@ where
         Ok(Box::pin(stream::iter(events.into_iter().map(Ok))))
     }
 
-    async fn fetch_all_events(&self, aggregate_id: &str) -> Result<EventStream<A>, AggregateError> {
+    async fn fetch_all_events(&self, aggregate_id: &str) -> Result<EventStream<A>, CqrsError> {
         let sql = format!(
             "SELECT event_id, aggregate_id, version, payload, metadata, at FROM {} WHERE aggregate_id = $1 ORDER BY version ASC",
             self.journal_table_name
@@ -145,7 +145,7 @@ where
             .await
             .map_err(map_pg_error)?;
 
-        let events: Result<Vec<EventEnvelope<A>>, AggregateError> = rows
+        let events: Result<Vec<EventEnvelope<A>>, CqrsError> = rows
             .into_iter()
             .map(|row| {
                 let payload: JsonValue = row.try_get("payload").map_err(map_pg_error)?;
@@ -157,9 +157,9 @@ where
                         .map_err(map_pg_error)?,
                     version: row.try_get::<_, i64>("version").map_err(map_pg_error)? as usize,
                     payload: serde_json::from_value(payload)
-                        .map_err(|e| AggregateError::SerializationError(Box::new(e)))?,
+                        .map_err(|e| CqrsError::serialization_error(e))?,
                     metadata: serde_json::from_value(metadata)
-                        .map_err(|e| AggregateError::SerializationError(Box::new(e)))?,
+                        .map_err(|e| CqrsError::serialization_error(e))?,
                     at: row.try_get("at").map_err(map_pg_error)?,
                 })
             })
@@ -174,7 +174,7 @@ where
         aggregate_id: &str,
         page: usize,
         page_size: usize,
-    ) -> Result<(Vec<EventEnvelope<A>>, i64), AggregateError> {
+    ) -> Result<(Vec<EventEnvelope<A>>, i64), CqrsError> {
         // Get total count
         let count_sql = format!(
             "SELECT COUNT(*) FROM {} WHERE aggregate_id = $1",
@@ -199,7 +199,7 @@ where
             .await
             .map_err(map_pg_error)?;
 
-        let events: Result<Vec<EventEnvelope<A>>, AggregateError> = rows
+        let events: Result<Vec<EventEnvelope<A>>, CqrsError> = rows
             .into_iter()
             .map(|row| {
                 let payload: JsonValue = row.try_get("payload").map_err(map_pg_error)?;
@@ -211,9 +211,9 @@ where
                         .map_err(map_pg_error)?,
                     version: row.try_get::<_, i64>("version").map_err(map_pg_error)? as usize,
                     payload: serde_json::from_value(payload)
-                        .map_err(|e| AggregateError::SerializationError(Box::new(e)))?,
+                        .map_err(|e| CqrsError::serialization_error(e))?,
                     metadata: serde_json::from_value(metadata)
-                        .map_err(|e| AggregateError::SerializationError(Box::new(e)))?,
+                        .map_err(|e| CqrsError::serialization_error(e))?,
                     at: row.try_get("at").map_err(map_pg_error)?,
                 })
             })
@@ -227,7 +227,7 @@ where
         &self,
         aggregate: &A,
         _session: &Self::Session,
-    ) -> Result<Option<EventEnvelope<A>>, AggregateError> {
+    ) -> Result<Option<EventEnvelope<A>>, CqrsError> {
         let sql = format!(
             "SELECT event_id, aggregate_id, version, payload, metadata, at FROM {} WHERE aggregate_id = $1 ORDER BY version DESC LIMIT 1",
             self.journal_table_name
@@ -247,9 +247,9 @@ where
                     .map_err(map_pg_error)?,
                 version: row.try_get::<_, i64>("version").map_err(map_pg_error)? as usize,
                 payload: serde_json::from_value(payload)
-                    .map_err(|e| AggregateError::SerializationError(Box::new(e)))?,
+                    .map_err(|e| CqrsError::serialization_error(e))?,
                 metadata: serde_json::from_value(metadata)
-                    .map_err(|e| AggregateError::SerializationError(Box::new(e)))?,
+                    .map_err(|e| CqrsError::serialization_error(e))?,
                 at: row.try_get("at").map_err(map_pg_error)?,
             }))
         } else {
@@ -261,7 +261,7 @@ where
         &self,
         events: Vec<EventEnvelope<A>>,
         session: Self::Session,
-    ) -> Result<Self::Session, AggregateError> {
+    ) -> Result<Self::Session, CqrsError> {
         if events.is_empty() {
             return Ok(session);
         }
@@ -272,9 +272,9 @@ where
         // Use single INSERT per event to keep it simple and stay within the explicit transaction
         for e in events.iter() {
             let payload = serde_json::to_value(&e.payload)
-                .map_err(|err| AggregateError::SerializationError(Box::new(err)))?;
+                .map_err(|err| CqrsError::serialization_error(err))?;
             let metadata = serde_json::to_value(&e.metadata)
-                .map_err(|err| AggregateError::SerializationError(Box::new(err)))?;
+                .map_err(|err| CqrsError::serialization_error(err))?;
             self.client
                 .execute(
                     &sql,
@@ -298,9 +298,9 @@ where
         aggregate: &A,
         version: usize,
         session: Self::Session,
-    ) -> Result<Self::Session, AggregateError> {
+    ) -> Result<Self::Session, CqrsError> {
         let data = serde_json::to_value(aggregate)
-            .map_err(|e| AggregateError::SerializationError(Box::new(e)))?;
+            .map_err(|e| CqrsError::serialization_error(e))?;
         let sql = format!(
             "INSERT INTO {} (aggregate_id, data, version) VALUES ($1, $2, $3) \
              ON CONFLICT (aggregate_id) DO UPDATE SET data = EXCLUDED.data, version = EXCLUDED.version",

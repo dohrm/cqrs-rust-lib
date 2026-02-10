@@ -1,6 +1,6 @@
 use crate::read::storage::{HasId, Storage, StorageError};
 use crate::read::Paged;
-use crate::{Aggregate, AggregateError, CqrsContext, Snapshot};
+use crate::{Aggregate, CqrsContext, CqrsError, Snapshot};
 use futures::TryStreamExt;
 use mongodb::bson::{doc, to_bson, Document};
 use mongodb::{bson, Database};
@@ -10,12 +10,12 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-fn map_mongo_error(e: mongodb::error::Error) -> AggregateError {
-    AggregateError::DatabaseError(e.into())
+fn map_mongo_error(e: mongodb::error::Error) -> CqrsError {
+    CqrsError::database_error(e)
 }
 
-fn map_bson_error(e: bson::ser::Error) -> AggregateError {
-    AggregateError::DatabaseError(e.into())
+fn map_bson_error(e: bson::ser::Error) -> CqrsError {
+    CqrsError::database_error(e)
 }
 
 pub struct SkipLimit {
@@ -70,15 +70,15 @@ where
         &self,
         base_query: Document,
         parent_id: &Option<String>,
-    ) -> Result<Document, AggregateError> {
+    ) -> Result<Document, CqrsError> {
         match (V::parent_field_id(), parent_id) {
             (Some(parent_field_id), Some(parent_id)) => {
                 let parent_id_query = doc! {parent_field_id: parent_id};
                 Ok(doc! { "$and": [base_query, parent_id_query] })
             }
-            (Some(_), None) => Err(AggregateError::UserError(Box::new(
-                StorageError::MissingParentId,
-            ))),
+            (Some(_), None) => Err(CqrsError::validation(
+                StorageError::MissingParentId.to_string(),
+            )),
             _ => Ok(base_query),
         }
     }
@@ -99,7 +99,7 @@ where
         parent_id: Option<String>,
         query: Q,
         context: CqrsContext,
-    ) -> Result<Paged<V>, AggregateError> {
+    ) -> Result<Paged<V>, CqrsError> {
         let collection = self.database.collection::<V>(&self.collection_name);
         let q = self.parent_id_query(self.query_builder.to_query(&query, &context), &parent_id)?;
         let sort = self.query_builder.to_sort(&query, &context);
@@ -133,7 +133,7 @@ where
         parent_id: Option<String>,
         id: &str,
         _context: CqrsContext,
-    ) -> Result<Option<V>, AggregateError> {
+    ) -> Result<Option<V>, CqrsError> {
         let collection = self.database.collection::<V>(&self.collection_name);
         collection
             .find_one(self.parent_id_query(doc! {V::field_id(): id}, &parent_id)?)
@@ -141,7 +141,7 @@ where
             .map_err(map_mongo_error)
     }
 
-    async fn save(&self, entity: V, _context: CqrsContext) -> Result<(), AggregateError> {
+    async fn save(&self, entity: V, _context: CqrsContext) -> Result<(), CqrsError> {
         let collection = self.database.collection::<V>(&self.collection_name);
         let id = doc! {V::field_id(): entity.id()};
         let e = if let Some(entity) = to_bson(&entity).map_err(map_bson_error)?.as_document_mut() {
@@ -204,7 +204,7 @@ where
         parent_id: Option<String>,
         query: Q,
         context: CqrsContext,
-    ) -> Result<Paged<A>, AggregateError> {
+    ) -> Result<Paged<A>, CqrsError> {
         let result = self.inner.filter(parent_id, query, context).await?;
 
         Ok(Paged {
@@ -220,7 +220,7 @@ where
         parent_id: Option<String>,
         id: &str,
         context: CqrsContext,
-    ) -> Result<Option<A>, AggregateError> {
+    ) -> Result<Option<A>, CqrsError> {
         Ok(self
             .inner
             .find_by_id(parent_id, id, context)
@@ -228,9 +228,9 @@ where
             .map(|s| s.state))
     }
 
-    async fn save(&self, _entity: A, _context: CqrsContext) -> Result<(), AggregateError> {
-        Err(AggregateError::DatabaseError(Box::new(
+    async fn save(&self, _entity: A, _context: CqrsContext) -> Result<(), CqrsError> {
+        Err(CqrsError::database_error(
             StorageError::UnsupportedMethod("SnapshotStorage#save".to_string()),
-        )))
+        ))
     }
 }

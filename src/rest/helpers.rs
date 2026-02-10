@@ -1,9 +1,4 @@
-use crate::AggregateError;
-use axum::response::IntoResponse;
-use axum::Json;
-use http::StatusCode;
-use serde_json::{json, Value};
-use std::str::FromStr;
+use serde_json::Value;
 use utoipa::openapi::path::{OperationBuilder, Parameter, ParameterBuilder, ParameterIn};
 use utoipa::openapi::request_body::RequestBody;
 use utoipa::openapi::{
@@ -52,9 +47,6 @@ pub fn generate_route(
         } else {
             Some(query_parameters)
         })
-        // .deprecated(Some(Deprecated::False))
-        // .summary(Some("Summary"))
-        // .description(Some("Description"))
         .tag(type_);
 
     for (name, schema) in path_parameters {
@@ -63,8 +55,6 @@ pub fn generate_route(
                 .name(name)
                 .parameter_in(ParameterIn::Path)
                 .required(Required::True)
-                // .deprecated(Some(Deprecated::False))
-                // .description(Some("xxx"))
                 .schema(Some(schema)),
         );
     }
@@ -182,35 +172,4 @@ pub fn sanitize_schema_name(name: &str) -> String {
         prev_char = Some(c);
     }
     result
-}
-
-pub fn aggregate_error_to_json(err: AggregateError) -> impl IntoResponse {
-    match err {
-        AggregateError::UserError(err) => match Value::from_str(err.to_string().as_str()) {
-            Ok(value) => (StatusCode::BAD_REQUEST, Json(value)).into_response(),
-            Err(_) => (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error":err.to_string()})),
-            )
-                .into_response(),
-        },
-        AggregateError::Conflict => {
-            (StatusCode::CONFLICT, Json(json!({"error": "conflict"}))).into_response()
-        }
-        AggregateError::DatabaseError(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": err.to_string(), "type": "database" })),
-        )
-            .into_response(),
-        AggregateError::SerializationError(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": err.to_string(), "type": "serialization" })),
-        )
-            .into_response(),
-        AggregateError::UnexpectedError(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": err.to_string(), "type": "unexpected" })),
-        )
-            .into_response(),
-    }
 }

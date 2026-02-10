@@ -1,5 +1,5 @@
 use crate::read::Paged;
-use crate::{AggregateError, CqrsContext};
+use crate::{CqrsContext, CqrsError};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::fmt::Debug;
@@ -35,14 +35,14 @@ where
         parent_id: Option<String>,
         query: Q,
         context: CqrsContext,
-    ) -> Result<Paged<V>, AggregateError>;
+    ) -> Result<Paged<V>, CqrsError>;
 
     async fn find_by_id(
         &self,
         parent_id: Option<String>,
         id: &str,
         context: CqrsContext,
-    ) -> Result<Option<V>, AggregateError>;
+    ) -> Result<Option<V>, CqrsError>;
 
-    async fn save(&self, entity: V, context: CqrsContext) -> Result<(), AggregateError>;
+    async fn save(&self, entity: V, context: CqrsContext) -> Result<(), CqrsError>;
 }

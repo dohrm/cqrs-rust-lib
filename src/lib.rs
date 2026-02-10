@@ -7,7 +7,9 @@ mod denormalizer;
 pub use denormalizer::*;
 
 mod errors;
+#[allow(deprecated)]
 pub use errors::*;
+
 mod event;
 pub use event::*;
 

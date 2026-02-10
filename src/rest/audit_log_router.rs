@@ -1,6 +1,5 @@
 use crate::event::Event;
 use crate::read::Paged;
-use crate::rest::helpers;
 use crate::{Aggregate, CqrsContext, DynEventStore, EventEnvelope};
 use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
@@ -14,6 +13,8 @@ use utoipa::openapi::path::ParameterIn;
 use utoipa::openapi::{HttpMethod, Ref, RefOr};
 use utoipa::{IntoParams, PartialSchema, ToSchema};
 use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouter};
+
+use crate::rest::helpers;
 
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -140,7 +141,7 @@ where
                 };
                 (StatusCode::OK, Json(response)).into_response()
             }
-            Err(err) => helpers::aggregate_error_to_json(err).into_response(),
+            Err(err) => err.into_response(),
         }
     }
 }

@@ -1,4 +1,4 @@
-use crate::errors::AggregateError;
+use crate::errors::CqrsError;
 use crate::es::storage::{EventStoreStorage, EventStream};
 use crate::snapshot::Snapshot;
 use crate::{Aggregate, EventEnvelope};
@@ -6,8 +6,8 @@ use futures::{StreamExt, TryStreamExt};
 use mongodb::bson::doc;
 use mongodb::{ClientSession, Database};
 
-fn map_mongo_error(e: mongodb::error::Error) -> AggregateError {
-    AggregateError::DatabaseError(e.into())
+fn map_mongo_error(e: mongodb::error::Error) -> CqrsError {
+    CqrsError::database_error(e)
 }
 
 #[derive(Clone, Debug)]
@@ -78,7 +78,7 @@ where
     A: Aggregate + 'static,
 {
     type Session = ClientSession;
-    async fn start_session(&self) -> Result<Self::Session, AggregateError> {
+    async fn start_session(&self) -> Result<Self::Session, CqrsError> {
         let mut session = self
             .database
             .client()
@@ -89,14 +89,14 @@ where
         Ok(session)
     }
 
-    async fn close_session(&self, mut session: Self::Session) -> Result<(), AggregateError> {
+    async fn close_session(&self, mut session: Self::Session) -> Result<(), CqrsError> {
         session.commit_transaction().await.map_err(map_mongo_error)
     }
 
     async fn fetch_snapshot(
         &self,
         aggregate_id: &str,
-    ) -> Result<Option<Snapshot<A>>, AggregateError> {
+    ) -> Result<Option<Snapshot<A>>, CqrsError> {
         self.snapshot_collection(None)
             .find_one(doc! { "_id": aggregate_id})
             .await
@@ -107,7 +107,7 @@ where
         &self,
         aggregate_id: &str,
         version: usize,
-    ) -> Result<EventStream<A>, AggregateError> {
+    ) -> Result<EventStream<A>, CqrsError> {
         let cursor = self
             .journal_collection(None)
             .find(doc! {"aggregateId": aggregate_id, "version": {"$gt": version as i64}})
@@ -115,11 +115,11 @@ where
             .map_err(map_mongo_error)?;
 
         Ok(Box::pin(cursor.map(|result| {
-            result.map_err(|e| AggregateError::DatabaseError(e.into()))
+            result.map_err(|e| CqrsError::database_error(e))
         })))
     }
 
-    async fn fetch_all_events(&self, aggregate_id: &str) -> Result<EventStream<A>, AggregateError> {
+    async fn fetch_all_events(&self, aggregate_id: &str) -> Result<EventStream<A>, CqrsError> {
         let cursor = self
             .journal_collection(None)
             .find(doc! {"aggregateId": aggregate_id})
@@ -127,7 +127,7 @@ where
             .map_err(map_mongo_error)?;
 
         Ok(Box::pin(cursor.map(|result| {
-            result.map_err(|e| AggregateError::DatabaseError(e.into()))
+            result.map_err(|e| CqrsError::database_error(e))
         })))
     }
 
@@ -136,7 +136,7 @@ where
         aggregate_id: &str,
         page: usize,
         page_size: usize,
-    ) -> Result<(Vec<EventEnvelope<A>>, i64), AggregateError> {
+    ) -> Result<(Vec<EventEnvelope<A>>, i64), CqrsError> {
         // Get total count
         let total = self
             .journal_collection(None)
@@ -166,7 +166,7 @@ where
         &self,
         aggregate: &A,
         session: &Self::Session,
-    ) -> Result<Option<EventEnvelope<A>>, AggregateError> {
+    ) -> Result<Option<EventEnvelope<A>>, CqrsError> {
         self.journal_collection(Some(session))
             .find_one(doc! {"aggregateId": aggregate.aggregate_id()})
             .sort(doc! {"version": -1})
@@ -178,7 +178,7 @@ where
         &self,
         events: Vec<EventEnvelope<A>>,
         session: Self::Session,
-    ) -> Result<Self::Session, AggregateError> {
+    ) -> Result<Self::Session, CqrsError> {
         let _r = self
             .journal_collection(Some(&session))
             .insert_many(&events)
@@ -192,7 +192,7 @@ where
         aggregate: &A,
         version: usize,
         session: Self::Session,
-    ) -> Result<Self::Session, AggregateError> {
+    ) -> Result<Self::Session, CqrsError> {
         self.snapshot_collection(Some(&session))
             .find_one_and_replace(
                 doc! {"_id": aggregate.aggregate_id()},

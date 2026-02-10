@@ -1,5 +1,5 @@
 use crate::es::storage::{EventStoreStorage, EventStream};
-use crate::{Aggregate, AggregateError, EventEnvelope, Snapshot};
+use crate::{Aggregate, CqrsError, EventEnvelope, Snapshot};
 use futures::lock::{Mutex, OwnedMutexGuard};
 use futures::stream;
 use std::collections::HashMap;
@@ -35,20 +35,20 @@ where
         OwnedMutexGuard<HashMap<String, Vec<EventEnvelope<A>>>>,
     );
 
-    async fn start_session(&self) -> Result<Self::Session, AggregateError> {
+    async fn start_session(&self) -> Result<Self::Session, CqrsError> {
         let journal = self.journal.clone().lock_owned().await;
         let snapshot = self.snapshot.clone().lock_owned().await;
         Ok((snapshot, journal))
     }
 
-    async fn close_session(&self, _session: Self::Session) -> Result<(), AggregateError> {
+    async fn close_session(&self, _session: Self::Session) -> Result<(), CqrsError> {
         Ok(())
     }
 
     async fn fetch_snapshot(
         &self,
         aggregate_id: &str,
-    ) -> Result<Option<Snapshot<A>>, AggregateError> {
+    ) -> Result<Option<Snapshot<A>>, CqrsError> {
         let snapshot = self.snapshot.lock().await;
         Ok(snapshot.get(aggregate_id).cloned())
     }
@@ -57,7 +57,7 @@ where
         &self,
         aggregate_id: &str,
         version: usize,
-    ) -> Result<EventStream<A>, AggregateError> {
+    ) -> Result<EventStream<A>, CqrsError> {
         let journal = self.journal.lock().await;
         let items = journal.get(aggregate_id).cloned().unwrap_or_default();
         let events: Vec<EventEnvelope<A>> =
@@ -65,7 +65,7 @@ where
         Ok(Box::pin(stream::iter(events.into_iter().map(Ok))))
     }
 
-    async fn fetch_all_events(&self, aggregate_id: &str) -> Result<EventStream<A>, AggregateError> {
+    async fn fetch_all_events(&self, aggregate_id: &str) -> Result<EventStream<A>, CqrsError> {
         let journal = self.journal.lock().await;
         let items = journal.get(aggregate_id).cloned().unwrap_or_default();
         Ok(Box::pin(stream::iter(items.into_iter().map(Ok))))
@@ -76,7 +76,7 @@ where
         aggregate_id: &str,
         page: usize,
         page_size: usize,
-    ) -> Result<(Vec<EventEnvelope<A>>, i64), AggregateError> {
+    ) -> Result<(Vec<EventEnvelope<A>>, i64), CqrsError> {
         let journal = self.journal.lock().await;
         let items = journal.get(aggregate_id).cloned().unwrap_or_default();
         let total = items.len() as i64;
@@ -90,7 +90,7 @@ where
         &self,
         aggregate: &A,
         session: &Self::Session,
-    ) -> Result<Option<EventEnvelope<A>>, AggregateError> {
+    ) -> Result<Option<EventEnvelope<A>>, CqrsError> {
         let events = session
             .1
             .get(aggregate.aggregate_id().as_str())
@@ -103,7 +103,7 @@ where
         &self,
         events: Vec<EventEnvelope<A>>,
         mut session: Self::Session,
-    ) -> Result<Self::Session, AggregateError> {
+    ) -> Result<Self::Session, CqrsError> {
         if events.is_empty() {
             return Ok(session);
         }
@@ -125,7 +125,7 @@ where
         aggregate: &A,
         version: usize,
         mut session: Self::Session,
-    ) -> Result<Self::Session, AggregateError> {
+    ) -> Result<Self::Session, CqrsError> {
         session.0.insert(
             aggregate.aggregate_id(),
             Snapshot {

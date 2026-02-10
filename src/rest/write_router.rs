@@ -1,7 +1,7 @@
 use crate::engine::CqrsCommandEngine;
 use crate::rest::helpers;
 use crate::rest::helpers::SchemaData;
-use crate::{Aggregate, AggregateError, CommandHandler, CqrsContext};
+use crate::{Aggregate, CommandHandler, CqrsContext, CqrsError};
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use axum::routing::{post, put};
@@ -27,6 +27,7 @@ pub struct UpdateResult;
 pub struct CQRSWriteRouter<A>
 where
     A: Aggregate + CommandHandler + ToSchema + 'static,
+    A::Error: Into<CqrsError>,
 {
     engine: Arc<CqrsCommandEngine<A>>,
 }
@@ -34,6 +35,7 @@ where
 impl<A> CQRSWriteRouter<A>
 where
     A: Aggregate + CommandHandler + ToSchema + 'static,
+    A::Error: Into<CqrsError>,
 {
     #[must_use]
     fn new(engine: Arc<CqrsCommandEngine<A>>) -> Self {
@@ -163,12 +165,9 @@ where
                 Ok(result) => {
                     (StatusCode::CREATED, Json(CreationResult { id: result })).into_response()
                 }
-                Err(err) => helpers::aggregate_error_to_json(err).into_response(),
+                Err(err) => err.into_response(),
             },
-            Err(err) => {
-                helpers::aggregate_error_to_json(AggregateError::SerializationError(err.into()))
-                    .into_response()
-            }
+            Err(err) => CqrsError::serialization_error(err).into_response(),
         }
     }
 
@@ -187,12 +186,9 @@ where
                 .await
             {
                 Ok(_) => (StatusCode::OK, Json(UpdateResult)).into_response(),
-                Err(err) => helpers::aggregate_error_to_json(err).into_response(),
+                Err(err) => err.into_response(),
             },
-            Err(err) => {
-                helpers::aggregate_error_to_json(AggregateError::SerializationError(err.into()))
-                    .into_response()
-            }
+            Err(err) => CqrsError::serialization_error(err).into_response(),
         }
     }
 }

@@ -1,9 +1,11 @@
 use crate::account::amount::Amount;
+use crate::account::errors::ErrorCode;
 use crate::account::{CreateCommands, Events, UpdateCommands};
-use cqrs_rust_lib::{Aggregate, CommandHandler, CqrsContext, EventEnvelope, View};
+use cqrs_rust_lib::{
+    Aggregate, CommandHandler, CqrsContext, CqrsError, CqrsErrorCode, EventEnvelope, View,
+};
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
-use std::io::ErrorKind;
 use utoipa::ToSchema;
 
 const AGGREGATE_TYPE: &str = "account";
@@ -13,6 +15,7 @@ pub struct Account {
     pub id: String,
     pub owner: String,
     pub amount: Amount,
+    pub closed: bool,
 }
 
 #[async_trait::async_trait]
@@ -20,7 +23,7 @@ impl Aggregate for Account {
     const TYPE: &'static str = AGGREGATE_TYPE;
 
     type Event = Events;
-    type Error = std::io::Error;
+    type Error = CqrsError;
 
     fn aggregate_id(&self) -> String {
         self.id.clone()
@@ -42,13 +45,15 @@ impl Aggregate for Account {
             Events::Withdrawn { amount } => {
                 self.amount -= amount;
             }
-            Events::Closed => {}
+            Events::Closed => {
+                self.closed = true;
+            }
         }
         Ok(())
     }
 
-    fn error(_status: StatusCode, details: &str) -> Self::Error {
-        std::io::Error::new(ErrorKind::AddrInUse, details.to_string())
+    fn error(status: StatusCode, details: &str) -> Self::Error {
+        CqrsError::from_status(status, details)
     }
 }
 
@@ -75,8 +80,15 @@ impl CommandHandler for Account {
         _services: &Self::Services,
         _context: &CqrsContext,
     ) -> Result<Vec<Self::Event>, Self::Error> {
+        if self.closed {
+            return Err(ErrorCode::AccountClosed.error("This account is closed"));
+        }
+
         match command {
             UpdateCommands::Deposit { amount } => {
+                if amount.value == 0f64 {
+                    return Err(ErrorCode::InvalidAmount.error("Amount must be non-zero"));
+                }
                 if amount.value < 0f64 {
                     Ok(vec![Self::Event::Withdrawn {
                         amount: amount.abs(),
@@ -86,6 +98,15 @@ impl CommandHandler for Account {
                 }
             }
             UpdateCommands::Withdraw { amount } => {
+                if amount.value == 0f64 {
+                    return Err(ErrorCode::InvalidAmount.error("Amount must be non-zero"));
+                }
+                if amount.value > 0f64 && self.amount.value < amount.value {
+                    return Err(ErrorCode::InsufficientFunds.error(format!(
+                        "Cannot withdraw {}, balance is {}",
+                        amount.value, self.amount.value
+                    )));
+                }
                 if amount.value < 0f64 {
                     Ok(vec![Self::Event::Deposited {
                         amount: amount.abs(),

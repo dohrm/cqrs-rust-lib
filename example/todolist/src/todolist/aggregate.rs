@@ -1,6 +1,9 @@
 use super::commands::{CreateCommands, UpdateCommands};
+use super::errors::ErrorCode;
 use super::events::Events;
-use cqrs_rust_lib::{Aggregate, CommandHandler, CqrsContext, EventEnvelope, View};
+use cqrs_rust_lib::{
+    Aggregate, CommandHandler, CqrsContext, CqrsError, CqrsErrorCode, EventEnvelope, View,
+};
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -27,7 +30,7 @@ impl Aggregate for TodoList {
     const TYPE: &'static str = AGGREGATE_TYPE;
 
     type Event = Events;
-    type Error = std::io::Error;
+    type Error = CqrsError;
 
     fn aggregate_id(&self) -> String {
         self.id.clone()
@@ -66,8 +69,8 @@ impl Aggregate for TodoList {
         Ok(())
     }
 
-    fn error(_status: StatusCode, details: &str) -> Self::Error {
-        std::io::Error::other(details.to_string())
+    fn error(status: StatusCode, details: &str) -> Self::Error {
+        CqrsError::from_status(status, details)
     }
 }
 
@@ -84,7 +87,12 @@ impl CommandHandler for TodoList {
         _context: &CqrsContext,
     ) -> Result<Vec<Self::Event>, Self::Error> {
         match command {
-            CreateCommands::Create { name } => Ok(vec![Events::TodoListCreated { name }]),
+            CreateCommands::Create { name } => {
+                if name.trim().is_empty() {
+                    return Err(ErrorCode::ListNameRequired.error("List name cannot be empty"));
+                }
+                Ok(vec![Events::TodoListCreated { name }])
+            }
         }
     }
 
@@ -95,15 +103,39 @@ impl CommandHandler for TodoList {
         context: &CqrsContext,
     ) -> Result<Vec<Self::Event>, Self::Error> {
         match command {
-            UpdateCommands::AddTodo { title } => Ok(vec![Events::TodoAdded {
-                todo_id: context.next_uuid(),
-                title,
-            }]),
-            UpdateCommands::RemoveTodo { todo_id } => Ok(vec![Events::TodoRemoved { todo_id }]),
+            UpdateCommands::AddTodo { title } => {
+                if title.trim().is_empty() {
+                    return Err(ErrorCode::EmptyTitle.error("Todo title cannot be empty"));
+                }
+                Ok(vec![Events::TodoAdded {
+                    todo_id: context.next_uuid(),
+                    title,
+                }])
+            }
+            UpdateCommands::RemoveTodo { todo_id } => {
+                if !self.todos.iter().any(|t| t.id == todo_id) {
+                    return Err(ErrorCode::TodoNotFound
+                        .error(format!("Todo '{}' not found", todo_id)));
+                }
+                Ok(vec![Events::TodoRemoved { todo_id }])
+            }
             UpdateCommands::AssignTodo { todo_id, assignee } => {
+                if !self.todos.iter().any(|t| t.id == todo_id) {
+                    return Err(ErrorCode::TodoNotFound
+                        .error(format!("Todo '{}' not found", todo_id)));
+                }
                 Ok(vec![Events::TodoAssignedTo { todo_id, assignee }])
             }
-            UpdateCommands::ResolveTodo { todo_id } => Ok(vec![Events::TodoResolved { todo_id }]),
+            UpdateCommands::ResolveTodo { todo_id } => {
+                let todo = self.todos.iter().find(|t| t.id == todo_id);
+                match todo {
+                    None => Err(ErrorCode::TodoNotFound
+                        .error(format!("Todo '{}' not found", todo_id))),
+                    Some(t) if t.resolved => Err(ErrorCode::TodoAlreadyResolved
+                        .error(format!("Todo '{}' is already resolved", todo_id))),
+                    _ => Ok(vec![Events::TodoResolved { todo_id }]),
+                }
+            }
         }
     }
 }

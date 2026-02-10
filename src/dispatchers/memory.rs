@@ -1,4 +1,4 @@
-use crate::{Aggregate, AggregateError, CqrsContext, Dispatcher, EventEnvelope};
+use crate::{Aggregate, CqrsContext, CqrsError, Dispatcher, EventEnvelope};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, info};
@@ -50,7 +50,7 @@ impl<A: Aggregate> Dispatcher<A> for InMemoryDispatcher<A> {
         aggregate_id: &str,
         events: &[EventEnvelope<A>],
         _context: &CqrsContext,
-    ) -> Result<(), AggregateError> {
+    ) -> Result<(), CqrsError> {
         debug!("Dispatching events to in-memory store");
 
         let mut store = self.events.lock().unwrap();

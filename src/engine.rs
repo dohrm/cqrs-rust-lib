@@ -1,6 +1,6 @@
 use crate::context::CqrsContext;
 use crate::denormalizer::Dispatcher;
-use crate::errors::AggregateError;
+use crate::errors::CqrsError;
 use crate::event::Event;
 use crate::{Aggregate, CommandHandler, DynEventStore, EventEnvelope};
 use std::collections::HashMap;
@@ -46,23 +46,25 @@ use tracing::{debug, error, info};
 pub struct CqrsCommandEngine<A>
 where
     A: Aggregate + CommandHandler + 'static,
+    A::Error: Into<CqrsError>,
 {
     store: DynEventStore<A>,
     dispatchers: Vec<Box<dyn Dispatcher<A>>>,
     services: A::Services,
-    error_handler: Box<dyn Fn(&AggregateError) + Send + Sync>,
+    error_handler: Box<dyn Fn(&CqrsError) + Send + Sync>,
 }
 
 impl<A> CqrsCommandEngine<A>
 where
     A: Aggregate + CommandHandler + 'static,
+    A::Error: Into<CqrsError>,
 {
     #[must_use]
     pub fn new(
         store: DynEventStore<A>,
         dispatchers: Vec<Box<dyn Dispatcher<A>>>,
         services: A::Services,
-        error_handler: Box<dyn Fn(&AggregateError) + Send + Sync>,
+        error_handler: Box<dyn Fn(&CqrsError) + Send + Sync>,
     ) -> Self {
         Self {
             store,
@@ -80,7 +82,7 @@ where
         &self,
         command: A::CreateCommand,
         context: &CqrsContext,
-    ) -> Result<String, AggregateError> {
+    ) -> Result<String, CqrsError> {
         debug!("Executing create command");
         let result = self
             .execute_create_with_metadata(command, HashMap::new(), context)
@@ -97,7 +99,7 @@ where
         aggregate_id: &str,
         command: A::UpdateCommand,
         context: &CqrsContext,
-    ) -> Result<(), AggregateError> {
+    ) -> Result<(), CqrsError> {
         debug!("Executing update command");
         let result = self
             .execute_update_with_metadata(aggregate_id, command, HashMap::new(), context)
@@ -114,7 +116,7 @@ where
         command: A::CreateCommand,
         metadata: HashMap<String, String>,
         context: &CqrsContext,
-    ) -> Result<String, AggregateError> {
+    ) -> Result<String, CqrsError> {
         debug!("Executing create command with metadata");
         let aggregate_id = context.next_uuid();
         debug!(aggregate_id = %aggregate_id, "Generated new aggregate ID");
@@ -144,7 +146,7 @@ where
             }
             Err(e) => {
                 error!(error = %e, "Failed to handle create command");
-                return Err(AggregateError::UserError(e.into()));
+                return Err(e.into());
             }
         };
 
@@ -192,7 +194,7 @@ where
         command: A::UpdateCommand,
         metadata: HashMap<String, String>,
         context: &CqrsContext,
-    ) -> Result<(), AggregateError> {
+    ) -> Result<(), CqrsError> {
         debug!("Executing update command with metadata");
 
         let (mut aggregate, version) = match self.store.load_aggregate(aggregate_id).await {
@@ -220,14 +222,14 @@ where
             }
             Err(e) => {
                 error!(error = %e, "Failed to handle update command");
-                return Err(AggregateError::UserError(e.into()));
+                return Err(e.into());
             }
         };
 
         for event in &events {
             if let Err(e) = aggregate.apply(event.clone()) {
                 error!(error = %e, "Failed to apply event to aggregate");
-                return Err(AggregateError::UserError(e.into()));
+                return Err(e.into());
             }
         }
         debug!("Applied events to aggregate");
@@ -271,7 +273,7 @@ where
         events: Vec<A::Event>,
         metadata: HashMap<String, String>,
         context: &CqrsContext,
-    ) -> Result<(), AggregateError> {
+    ) -> Result<(), CqrsError> {
         debug!("Processing events for aggregate");
 
         for (i, event) in events.iter().enumerate() {
@@ -284,7 +286,7 @@ where
                 Ok(_) => debug!(event_index = i, "Successfully applied event to aggregate"),
                 Err(e) => {
                     error!(event_index = i, error = %e, "Failed to apply event to aggregate");
-                    return Err(AggregateError::UserError(e.into()));
+                    return Err(e.into());
                 }
             }
         }

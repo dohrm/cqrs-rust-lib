@@ -1,5 +1,5 @@
 use crate::es::storage::{EventStoreStorage, EventStream};
-use crate::{Aggregate, AggregateError, CqrsContext, EventEnvelope, EventStore, Snapshot};
+use crate::{Aggregate, CqrsContext, CqrsError, EventEnvelope, EventStore, Snapshot};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -38,7 +38,7 @@ where
     async fn load_snapshot(
         &self,
         aggregate_id: &str,
-    ) -> Result<Option<Snapshot<A>>, AggregateError> {
+    ) -> Result<Option<Snapshot<A>>, CqrsError> {
         debug!("Loading snapshot for aggregate");
         match self.persist.fetch_snapshot(aggregate_id).await {
             Ok(Some(snapshot)) => {
@@ -60,14 +60,14 @@ where
         &self,
         aggregate_id: &str,
         version: usize,
-    ) -> Result<EventStream<A>, AggregateError> {
+    ) -> Result<EventStream<A>, CqrsError> {
         debug!("Loading events from version");
         self.persist
             .fetch_events_from_version(aggregate_id, version)
             .await
     }
 
-    async fn load_events(&self, aggregate_id: &str) -> Result<EventStream<A>, AggregateError> {
+    async fn load_events(&self, aggregate_id: &str) -> Result<EventStream<A>, CqrsError> {
         debug!("Loading all events for aggregate");
         self.persist.fetch_all_events(aggregate_id).await
     }
@@ -77,7 +77,7 @@ where
         aggregate_id: &str,
         page: usize,
         page_size: usize,
-    ) -> Result<(Vec<EventEnvelope<A>>, i64), AggregateError> {
+    ) -> Result<(Vec<EventEnvelope<A>>, i64), CqrsError> {
         debug!("Loading paged events for aggregate");
         self.persist
             .fetch_events_paged(aggregate_id, page, page_size)
@@ -91,7 +91,7 @@ where
         metadata: HashMap<String, String>,
         version: usize,
         context: &CqrsContext,
-    ) -> Result<Vec<EventEnvelope<A>>, AggregateError> {
+    ) -> Result<Vec<EventEnvelope<A>>, CqrsError> {
         debug!("Starting commit process");
 
         let mut session = match self.persist.start_session().await {
@@ -121,7 +121,7 @@ where
 
         if version != latest_version {
             error!(latest_version = %latest_version, expected_version = %version, "Version conflict detected");
-            return Err(AggregateError::Conflict);
+            return Err(CqrsError::concurrency_error());
         }
 
         debug!("Creating event envelopes");

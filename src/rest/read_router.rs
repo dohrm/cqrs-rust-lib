@@ -173,7 +173,7 @@ where
     ) -> impl IntoResponse {
         match router.storage.filter(parent_id, query, context).await {
             Ok(result) => (StatusCode::OK, Json(result)).into_response(),
-            Err(err) => helpers::aggregate_error_to_json(err).into_response(),
+            Err(err) => err.into_response(),
         }
     }
 
@@ -186,7 +186,7 @@ where
         match router.storage.find_by_id(parent_id, &id, context).await {
             Ok(Some(x)) => (StatusCode::OK, Json(x)).into_response(),
             Ok(None) => (StatusCode::NOT_FOUND, Json(json!({ "id": id}))).into_response(),
-            Err(err) => helpers::aggregate_error_to_json(err).into_response(),
+            Err(err) => err.into_response(),
         }
     }
 }

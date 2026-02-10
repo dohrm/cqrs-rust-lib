@@ -5,14 +5,16 @@ A comprehensive Command Query Responsibility Segregation (CQRS) and Event Sourci
 ## Features
 
 - CQRS and Event Sourcing core primitives
-- Multiple storage options:
-  - In-memory storage (testing/development)
-  - MongoDB persistence (feature: `mongodb`)
-  - PostgreSQL persistence (feature: `postgres`)
-- Aggregate pattern with async command handling and event application
-- REST routers (feature: `utoipa`) with Axum and OpenAPI integration
-- Typed PostgreSQL read storage utilities (feature: `postgres`)
-- Optional dispatchers for denormalization/effects
+- Split `Aggregate` / `CommandHandler` traits (Single Responsibility)
+- Structured domain error system with `CqrsError` and `define_domain_errors!` macro
+- Multiple storage backends:
+  - In-memory (testing/development)
+  - MongoDB (feature: `mongodb`)
+  - PostgreSQL (feature: `postgres`)
+- REST routers with Axum and OpenAPI integration (feature: `utoipa`)
+- Audit log router for event history
+- Typed read storage and snapshot support
+- Pluggable dispatchers for denormalization/projections
 
 ## Installation
 
@@ -25,153 +27,258 @@ cqrs-rust-lib = "0.1.0"
 
 ### Cargo features
 
-- `mongodb`: Enable MongoDB persistence
-- `postgres`: Enable PostgreSQL persistence and read utilities
-- `utoipa`: Enable REST routers and OpenAPI integration
-- `mcp`: Enable MCP server integration (experimental)
-- `all`: Enable `utoipa`, `mongodb`, and `postgres`
-
-Examples:
+| Feature    | Description                                        |
+|------------|----------------------------------------------------|
+| `mongodb`  | MongoDB event persistence                          |
+| `postgres` | PostgreSQL event persistence and read utilities     |
+| `utoipa`   | REST routers and OpenAPI/Swagger integration        |
+| `mcp`      | MCP server integration (experimental)               |
+| `all`      | Enables `utoipa`, `mongodb`, and `postgres`         |
 
 ```toml
-[dependencies]
-# MongoDB support
+# PostgreSQL + REST
+cqrs-rust-lib = { version = "0.1.0", features = ["postgres", "utoipa"] }
+
+# MongoDB only
 cqrs-rust-lib = { version = "0.1.0", features = ["mongodb"] }
 ```
 
-```toml
-[dependencies]
-# PostgreSQL + REST
-cqrs-rust-lib = { version = "0.1.0", features = ["postgres", "utoipa"] }
-```
+## Quick Start
 
-## Usage
-
-### Basic (in-memory) example
+### 1. Define your domain
 
 ```rust
-use cqrs_rust_lib::{Aggregate, CqrsCommandEngine, CqrsContext};
-use cqrs_rust_lib::es::{inmemory::InMemoryPersist, EventStoreImpl};
+use cqrs_rust_lib::{Aggregate, CommandHandler, CqrsContext, CqrsError, Event};
 use http::StatusCode;
 use serde::{Deserialize, Serialize};
 
+// Events
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum AccountEvent {
+    Opened { owner: String },
+    Deposited { amount: i64 },
+    Withdrawn { amount: i64 },
+}
+
+impl Event for AccountEvent {
+    fn event_type(&self) -> String {
+        match self {
+            Self::Opened { .. } => "opened".into(),
+            Self::Deposited { .. } => "deposited".into(),
+            Self::Withdrawn { .. } => "withdrawn".into(),
+        }
+    }
+}
+
+// Commands
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum CreateCommand { Open { owner: String } }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum UpdateCommand { Deposit { amount: i64 }, Withdraw { amount: i64 } }
+
+// Aggregate
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct Account {
-    id: String,
-    balance: i64,
+pub struct Account {
+    pub id: String,
+    pub balance: i64,
 }
 
 #[async_trait::async_trait]
 impl Aggregate for Account {
     const TYPE: &'static str = "account";
-    type CreateCommand = CreateAccount;
-    type UpdateCommand = AccountUpdate;
     type Event = AccountEvent;
-    type Services = ();
-    type Error = anyhow::Error;
+    type Error = CqrsError;
 
     fn aggregate_id(&self) -> String { self.id.clone() }
     fn with_aggregate_id(mut self, id: String) -> Self { self.id = id; self }
 
-    async fn handle_create(&self, _cmd: Self::CreateCommand, _svc: &(), _ctx: &CqrsContext) -> Result<Vec<Self::Event>, Self::Error> {
-        Ok(vec![AccountEvent::Opened])
-    }
-    async fn handle_update(&self, cmd: Self::UpdateCommand, _svc: &(), _ctx: &CqrsContext) -> Result<Vec<Self::Event>, Self::Error> {
-        match cmd { AccountUpdate::Deposit { amount } => Ok(vec![AccountEvent::Deposited { amount }]) }
-    }
     fn apply(&mut self, event: Self::Event) -> Result<(), Self::Error> {
-        match event { AccountEvent::Opened => (), AccountEvent::Deposited { amount } => self.balance += amount };
+        match event {
+            AccountEvent::Opened { .. } => {}
+            AccountEvent::Deposited { amount } => self.balance += amount,
+            AccountEvent::Withdrawn { amount } => self.balance -= amount,
+        }
         Ok(())
     }
-    fn error(_status: StatusCode, details: &str) -> Self::Error { anyhow::anyhow!(details.to_string()) }
+
+    fn error(status: StatusCode, details: &str) -> Self::Error {
+        CqrsError::from_status(status, details)
+    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)] struct CreateAccount;
-#[derive(Debug, Clone, Serialize, Deserialize)] enum AccountUpdate { Deposit { amount: i64 } }
-#[derive(Debug, Clone, Serialize, Deserialize)] enum AccountEvent { Opened, Deposited { amount: i64 } }
+#[async_trait::async_trait]
+impl CommandHandler for Account {
+    type CreateCommand = CreateCommand;
+    type UpdateCommand = UpdateCommand;
+    type Services = ();
+
+    async fn handle_create(
+        &self, command: Self::CreateCommand, _svc: &(), _ctx: &CqrsContext,
+    ) -> Result<Vec<Self::Event>, Self::Error> {
+        match command {
+            CreateCommand::Open { owner } => Ok(vec![AccountEvent::Opened { owner }]),
+        }
+    }
+
+    async fn handle_update(
+        &self, command: Self::UpdateCommand, _svc: &(), _ctx: &CqrsContext,
+    ) -> Result<Vec<Self::Event>, Self::Error> {
+        match command {
+            UpdateCommand::Deposit { amount } => Ok(vec![AccountEvent::Deposited { amount }]),
+            UpdateCommand::Withdraw { amount } => Ok(vec![AccountEvent::Withdrawn { amount }]),
+        }
+    }
+}
+```
+
+### 2. Create the engine and execute commands
+
+```rust
+use cqrs_rust_lib::es::{inmemory::InMemoryPersist, EventStoreImpl};
+use cqrs_rust_lib::{CqrsCommandEngine, CqrsContext};
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let persist = InMemoryPersist::<Account>::new();
-    let event_store = EventStoreImpl::new(persist);
-    let engine = CqrsCommandEngine::new(
-        event_store,
-        vec![], // dispatchers
-        (),     // services
-        Box::new(|e| eprintln!("error: {e}")),
-    );
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let store = EventStoreImpl::new(InMemoryPersist::<Account>::new());
+    let engine = CqrsCommandEngine::new(store, vec![], (), Box::new(|_e| {}));
 
     let ctx = CqrsContext::default();
-    let id = engine.execute_create(CreateAccount, &ctx).await?;
-    engine.execute_update(&id, AccountUpdate::Deposit { amount: 100 }, &ctx).await?;
-
-    // With metadata
-    use std::collections::HashMap;
-    let mut meta = HashMap::new();
-    meta.insert("source".into(), "readme".into());
-    engine.execute_update_with_metadata(&id, AccountUpdate::Deposit { amount: 25 }, meta, &ctx).await?;
+    let id = engine.execute_create(CreateCommand::Open { owner: "Alice".into() }, &ctx).await?;
+    engine.execute_update(&id, UpdateCommand::Deposit { amount: 100 }, &ctx).await?;
     Ok(())
 }
 ```
 
-### PostgreSQL example
+## Domain Error Codes
 
-Requires feature `postgres`.
+Define structured, domain-specific error codes with the `define_domain_errors!` macro:
+
+```rust
+use cqrs_rust_lib::{define_domain_errors, CqrsError, CqrsErrorCode};
+use http::StatusCode;
+
+define_domain_errors! {
+    domain: "account",
+    prefix: 10,
+    errors: {
+        InsufficientFunds => (1, StatusCode::BAD_REQUEST, "INSUFFICIENT_FUNDS"),
+        InvalidAmount     => (2, StatusCode::BAD_REQUEST, "INVALID_AMOUNT"),
+        AccountClosed     => (3, StatusCode::GONE, "ACCOUNT_CLOSED"),
+    }
+}
+
+impl From<ErrorCode> for CqrsError {
+    fn from(e: ErrorCode) -> Self {
+        e.error(e.to_string())
+    }
+}
+```
+
+Use in command handlers:
+
+```rust
+if self.balance < amount {
+    return Err(ErrorCode::InsufficientFunds.error(
+        format!("Cannot withdraw {}, balance is {}", amount, self.balance)
+    ));
+}
+```
+
+API response:
+
+```json
+{
+  "domain": "account",
+  "code": "ACCOUNT_INSUFFICIENT_FUNDS",
+  "internalCode": 10001,
+  "status": 400,
+  "message": "Cannot withdraw 500, balance is 200"
+}
+```
+
+See `docs/migration_guide/domain_errors.md` for the full migration guide.
+
+## Storage Backends
+
+### PostgreSQL (feature: `postgres`)
 
 ```rust
 use cqrs_rust_lib::es::{postgres::PostgresPersist, EventStoreImpl};
-use cqrs_rust_lib::{CqrsCommandEngine, Dispatcher};
 use std::sync::Arc;
 use tokio_postgres::NoTls;
 
-async fn setup() -> anyhow::Result<()> {
-let (client, connection) = tokio_postgres::connect("postgres://user:pass@localhost/db", NoTls).await?;
-tokio::spawn(async move { let _ = connection.await; });
+let (client, conn) = tokio_postgres::connect("postgres://user:pass@localhost/db", NoTls).await?;
+tokio::spawn(async move { let _ = conn.await; });
 let client = Arc::new(client);
 
-let es_store = PostgresPersist::<Account>::new(client.clone());
-let event_store = EventStoreImpl::new(es_store);
-let engine = CqrsCommandEngine::new(event_store, vec![] as Vec<Box<dyn Dispatcher<Account>>>, (), Box::new(|e| eprintln!("{e}")));
-Ok(()) }
+let store = EventStoreImpl::new(PostgresPersist::<Account>::new(client.clone()));
+let engine = CqrsCommandEngine::new(store, vec![], (), Box::new(|_e| {}));
 ```
 
-### REST routers (optional, feature `utoipa`)
+### MongoDB (feature: `mongodb`)
 
-- Write router: `rest::CQRSWriteRouter::routes(Arc<CqrsCommandEngine<_, _>>)`
-- Read router: `rest::CQRSReadRouter::routes(repository, Aggregate::TYPE)`
-- See a complete wiring in `example\todolist\src\api.rs`.
+Same pattern with `es::mongodb::MongoDBPersist`.
 
-## API Overview
+## REST Routers (feature: `utoipa`)
 
-- Aggregate: Define domain behavior and state transitions
-- CqrsCommandEngine: Execute create/update commands, with optional metadata
-- EventStore: trait (see `src\event_store.rs`); `EventStoreImpl` provided for common storages
-- Event store implementations: `es::inmemory::InMemoryPersist`, `es::mongodb::MongoDBPersist` (feature), `es::postgres::PostgresPersist` (feature)
-- Read utilities: `read::postgres::{PostgresStorage, PostgresFromSnapshotStorage}` (feature: `postgres`)
+Axum routers with auto-generated OpenAPI schemas:
 
-## Examples and running
+- **Write router**: `rest::CQRSWriteRouter::routes(Arc<CqrsCommandEngine<A>>)`
+- **Read router**: `rest::CQRSReadRouter::routes(repository, Aggregate::TYPE)`
+- **Audit log router**: `rest::CQRSAuditLogRouter::routes(event_store, tag)`
 
-- example\todolist: full REST app with PostgreSQL and Swagger UI
-- example\bank: domain-centric showcase
+See `example/todolist/src/api.rs` for complete wiring with Swagger UI.
 
-Run todolist (PowerShell):
+## Architecture
 
-```powershell
+```
+Aggregate (state + events)     CommandHandler (commands -> events)
+         \                       /
+          CqrsCommandEngine ----+---- EventStore (persist)
+                |                         |
+           Dispatchers              Storage backends
+          (projections)          (InMemory/PG/Mongo)
+```
+
+### Key Types
+
+| Type | Description |
+|------|-------------|
+| `Aggregate` | Domain state, event application, identity |
+| `CommandHandler` | Command processing, business validation |
+| `CqrsCommandEngine` | Orchestrates command execution |
+| `EventStore` / `EventStoreImpl` | Event persistence abstraction |
+| `CqrsError` | Unified structured error type |
+| `CqrsErrorCode` | Trait for domain-specific error codes |
+| `CqrsContext` | Carries user, request ID, correlation |
+| `Dispatcher` | React to persisted events (projections) |
+| `View` / `ViewElements` | Read model projections |
+
+## Examples
+
+| Example | Storage | Features |
+|---------|---------|----------|
+| `example/bank` | MongoDB | Domain errors, commands, queries, views |
+| `example/todolist` | PostgreSQL | REST API, Swagger UI, snapshots, integration tests |
+
+### Run todolist
+
+```bash
 cargo run -p todolist -- start --pg-uri="postgres://user:pass@localhost:5432/db" --http-port=8081
 ```
 
-Or set env variable for URI:
+### Run tests
 
-```powershell
-$env:PG_URL_SECRET = "postgres://user:pass@localhost:5432/db"; cargo run -p todolist -- start --http-port=8081
+```bash
+cargo test             # lib tests
+cargo test -p todolist # integration tests
 ```
 
-Run tests:
+## Migration Guides
 
-```powershell
-cargo test
-cargo test -p todolist
-```
+- [Aggregate / CommandHandler Split](docs/migration_guide/split_aggregate.md)
+- [Domain Error Codes](docs/migration_guide/domain_errors.md)
 
 ## License
 
@@ -179,4 +286,4 @@ This project is licensed under the terms found in the [LICENSE](LICENSE) file.
 
 ## Contributing
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details on how to contribute to this project.
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details.

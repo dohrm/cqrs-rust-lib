@@ -1,5 +1,5 @@
 use crate::read::storage::{DynStorage, HasId};
-use crate::{Aggregate, AggregateError, CqrsContext, Dispatcher, EventEnvelope, View};
+use crate::{Aggregate, CqrsContext, CqrsError, Dispatcher, EventEnvelope, View};
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;
 
@@ -34,7 +34,7 @@ where
         aggregate_id: &str,
         events: &[EventEnvelope<A>],
         context: &CqrsContext,
-    ) -> Result<(), AggregateError> {
+    ) -> Result<(), CqrsError> {
         for event in events {
             let view_id = V::view_id(event);
             let prev = self

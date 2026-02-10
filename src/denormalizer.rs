@@ -1,4 +1,4 @@
-use crate::{Aggregate, AggregateError, CqrsContext, EventEnvelope};
+use crate::{Aggregate, CqrsContext, CqrsError, EventEnvelope};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::fmt::Debug;
@@ -10,7 +10,7 @@ pub trait Dispatcher<A: Aggregate>: Send + Sync {
         aggregate_id: &str,
         events: &[EventEnvelope<A>],
         context: &CqrsContext,
-    ) -> Result<(), AggregateError>;
+    ) -> Result<(), CqrsError>;
 }
 
 pub trait View<A: Aggregate>:
