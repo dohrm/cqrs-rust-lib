@@ -102,10 +102,10 @@ where
     async fn save_events(
         &self,
         events: Vec<EventEnvelope<A>>,
-        mut session: Self::Session,
-    ) -> Result<Self::Session, CqrsError> {
+        session: &mut Self::Session,
+    ) -> Result<(), CqrsError> {
         if events.is_empty() {
-            return Ok(session);
+            return Ok(());
         }
         let aggregate_id = events.first().unwrap().aggregate_id.clone();
         session
@@ -117,15 +117,15 @@ where
                 }
             })
             .or_insert(events);
-        Ok(session)
+        Ok(())
     }
 
     async fn save_snapshot(
         &self,
         aggregate: &A,
         version: usize,
-        mut session: Self::Session,
-    ) -> Result<Self::Session, CqrsError> {
+        session: &mut Self::Session,
+    ) -> Result<(), CqrsError> {
         session.0.insert(
             aggregate.aggregate_id(),
             Snapshot {
@@ -134,6 +134,6 @@ where
                 version,
             },
         );
-        Ok(session)
+        Ok(())
     }
 }

@@ -140,16 +140,26 @@ where
             .query_one(&count_sql, &count_params)
             .await
             .map_err(map_pg_error)?;
-        let total: i64 = row.get::<_, i64>("total");
+        let total: i64 = row.try_get::<_, i64>("total").map_err(map_pg_error)?;
 
         // page query
+        let param_offset = owned_params.len() + 1;
         let select_sql = format!(
-            "SELECT data FROM {}{}{} OFFSET {} LIMIT {}",
-            self.table_name, where_full, order_by, offset_v, limit_v
+            "SELECT data FROM {}{}{} OFFSET ${} LIMIT ${}",
+            self.table_name, where_full, order_by, param_offset, param_offset + 1
         );
+        let mut select_params: Vec<Box<dyn ToSql + Sync + Send>> = owned_params
+            .into_iter()
+            .collect();
+        select_params.push(Box::new(offset_v));
+        select_params.push(Box::new(limit_v));
+        let select_params_ref: Vec<&(dyn ToSql + Sync)> = select_params
+            .iter()
+            .map(|b| b.as_ref() as &(dyn ToSql + Sync))
+            .collect();
         let rows = self
             .client
-            .query(&select_sql, &count_params)
+            .query(&select_sql, &select_params_ref)
             .await
             .map_err(map_pg_error)?;
         let mut items: Vec<V> = Vec::with_capacity(rows.len());

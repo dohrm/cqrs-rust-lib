@@ -99,28 +99,11 @@ pub async fn start(config: AppConfig) -> Result<(), Box<dyn std::error::Error + 
 
     // Ensure tables exist
     client
-        .batch_execute(
-            r#"
-            CREATE TABLE IF NOT EXISTS todolist_snapshots (
-                aggregate_id TEXT PRIMARY KEY,
-                data JSONB NOT NULL,
-                version BIGINT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS todolist_journal (
-                event_id TEXT PRIMARY KEY,
-                aggregate_id TEXT NOT NULL,
-                version BIGINT NOT NULL,
-                payload JSONB NOT NULL,
-                metadata JSONB NOT NULL,
-                at TIMESTAMPTZ NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_todolist_journal_agg_ver ON todolist_journal(aggregate_id, version);
-            "#,
-        )
+        .batch_execute(&PostgresPersist::<TodoList>::schema())
         .await?;
 
     // Storages
-    let es_store = PostgresPersist::<TodoList>::new(client.clone());
+    let es_store = PostgresPersist::<TodoList>::from_client(client.clone());
     let repository = Arc::new(PostgresFromSnapshotStorage::<
         TodoList,
         TodoListQuery,

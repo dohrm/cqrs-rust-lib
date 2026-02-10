@@ -177,23 +177,23 @@ where
     async fn save_events(
         &self,
         events: Vec<EventEnvelope<A>>,
-        session: Self::Session,
-    ) -> Result<Self::Session, CqrsError> {
+        session: &mut Self::Session,
+    ) -> Result<(), CqrsError> {
         let _r = self
-            .journal_collection(Some(&session))
+            .journal_collection(Some(session))
             .insert_many(&events)
             .await
             .map_err(map_mongo_error)?;
-        Ok(session)
+        Ok(())
     }
 
     async fn save_snapshot(
         &self,
         aggregate: &A,
         version: usize,
-        session: Self::Session,
-    ) -> Result<Self::Session, CqrsError> {
-        self.snapshot_collection(Some(&session))
+        session: &mut Self::Session,
+    ) -> Result<(), CqrsError> {
+        self.snapshot_collection(Some(session))
             .find_one_and_replace(
                 doc! {"_id": aggregate.aggregate_id()},
                 Snapshot::<A> {
@@ -205,6 +205,13 @@ where
             .upsert(true)
             .await
             .map_err(map_mongo_error)?;
-        Ok(session)
+        Ok(())
+    }
+
+    async fn abort_session(&self, mut session: Self::Session) -> Result<(), CqrsError> {
+        session
+            .abort_transaction()
+            .await
+            .map_err(map_mongo_error)
     }
 }

@@ -27,6 +27,75 @@ where
             persist,
         })
     }
+
+    async fn execute_within_session(
+        &self,
+        session: &mut P::Session,
+        events: Vec<A::Event>,
+        aggregate: &A,
+        metadata: HashMap<String, String>,
+        version: usize,
+        context: &CqrsContext,
+    ) -> Result<Vec<EventEnvelope<A>>, CqrsError> {
+        let latest_event = match self.persist.fetch_latest_event(aggregate, session).await {
+            Ok(event) => {
+                debug!(has_event = event.is_some(), "Fetched latest event");
+                event
+            }
+            Err(e) => {
+                error!(error = %e, "Failed to fetch latest event");
+                return Err(e);
+            }
+        };
+
+        let latest_version = latest_event.map(|e| e.version).unwrap_or(0);
+        debug!(latest_version = %latest_version, expected_version = %version, "Checking version");
+
+        if version != latest_version {
+            error!(latest_version = %latest_version, expected_version = %version, "Version conflict detected");
+            return Err(CqrsError::concurrency_error());
+        }
+
+        debug!("Creating event envelopes");
+        let envelopes = events
+            .iter()
+            .enumerate()
+            .map(|(i, e)| {
+                let event_id = context.next_uuid();
+                let event_version = version + i + 1;
+                debug!(event_id = %event_id, event_version = %event_version, "Creating event envelope");
+                EventEnvelope {
+                    event_id,
+                    aggregate_id: aggregate.aggregate_id(),
+                    version: event_version,
+                    payload: e.clone(),
+                    metadata: metadata.clone(),
+                    at: context.now(),
+                }
+            })
+            .collect::<Vec<_>>();
+
+        debug!(event_count = envelopes.len(), "Saving events");
+        if let Err(e) = self.persist.save_events(envelopes.clone(), session).await {
+            error!(error = %e, "Failed to save events");
+            return Err(e);
+        }
+        debug!("Events saved successfully");
+
+        let next_latest_version = version + envelopes.len();
+        debug!(next_version = %next_latest_version, "Saving snapshot");
+        if let Err(e) = self
+            .persist
+            .save_snapshot(aggregate, next_latest_version, session)
+            .await
+        {
+            error!(error = %e, "Failed to save snapshot");
+            return Err(e);
+        }
+        debug!("Snapshot saved successfully");
+
+        Ok(envelopes)
+    }
 }
 
 #[async_trait::async_trait]
@@ -105,80 +174,25 @@ where
             }
         };
 
-        let latest_event = match self.persist.fetch_latest_event(aggregate, &session).await {
-            Ok(event) => {
-                debug!(has_event = event.is_some(), "Fetched latest event");
-                event
-            }
-            Err(e) => {
-                error!(error = %e, "Failed to fetch latest event");
-                return Err(e);
-            }
-        };
+        let result = self
+            .execute_within_session(&mut session, events, aggregate, metadata, version, context)
+            .await;
 
-        let latest_version = latest_event.map(|e| e.version).unwrap_or(0);
-        debug!(latest_version = %latest_version, expected_version = %version, "Checking version");
-
-        if version != latest_version {
-            error!(latest_version = %latest_version, expected_version = %version, "Version conflict detected");
-            return Err(CqrsError::concurrency_error());
-        }
-
-        debug!("Creating event envelopes");
-        let events = events
-            .iter()
-            .enumerate()
-            .map(|(i, e)| {
-                let event_id = context.next_uuid();
-                let event_version = version + i + 1;
-                debug!(event_id = %event_id, event_version = %event_version, "Creating event envelope");
-                EventEnvelope {
-                    event_id,
-                    aggregate_id: aggregate.aggregate_id(),
-                    version: event_version,
-                    payload: e.clone(),
-                    metadata: metadata.clone(),
-                    at: context.now(),
+        match result {
+            Ok(events) => {
+                debug!("Closing session");
+                if let Err(e) = self.persist.close_session(session).await {
+                    error!(error = %e, "Failed to close session");
+                    return Err(e);
                 }
-            })
-            .collect::<Vec<_>>();
-
-        debug!(event_count = events.len(), "Saving events");
-        session = match self.persist.save_events(events.clone(), session).await {
-            Ok(session) => {
-                debug!("Events saved successfully");
-                session
+                info!(event_count = events.len(), "Commit completed successfully");
+                Ok(events)
             }
             Err(e) => {
-                error!(error = %e, "Failed to save events");
-                return Err(e);
+                error!(error = %e, "Error during commit, aborting session");
+                let _ = self.persist.abort_session(session).await;
+                Err(e)
             }
-        };
-
-        let next_latest_version = version + events.len();
-        debug!(next_version = %next_latest_version, "Saving snapshot");
-        session = match self
-            .persist
-            .save_snapshot(aggregate, next_latest_version, session)
-            .await
-        {
-            Ok(session) => {
-                debug!("Snapshot saved successfully");
-                session
-            }
-            Err(e) => {
-                error!(error = %e, "Failed to save snapshot");
-                return Err(e);
-            }
-        };
-
-        debug!("Closing session");
-        if let Err(e) = self.persist.close_session(session).await {
-            error!(error = %e, "Failed to close session");
-            return Err(e);
         }
-
-        info!(event_count = events.len(), "Commit completed successfully");
-        Ok(events)
     }
 }

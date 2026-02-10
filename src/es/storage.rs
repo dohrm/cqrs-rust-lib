@@ -43,13 +43,17 @@ where
     async fn save_events(
         &self,
         events: Vec<EventEnvelope<A>>,
-        session: Self::Session,
-    ) -> Result<Self::Session, CqrsError>;
+        session: &mut Self::Session,
+    ) -> Result<(), CqrsError>;
 
     async fn save_snapshot(
         &self,
         aggregate: &A,
         version: usize,
-        session: Self::Session,
-    ) -> Result<Self::Session, CqrsError>;
+        session: &mut Self::Session,
+    ) -> Result<(), CqrsError>;
+
+    async fn abort_session(&self, _session: Self::Session) -> Result<(), CqrsError> {
+        Ok(())
+    }
 }
