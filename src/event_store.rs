@@ -51,8 +51,7 @@ where
         let mut event_stream = self.load_events_from_version(aggregate_id, version).await?;
         while let Some(event) = event_stream.next().await {
             let event = event?;
-            agg.apply(event.payload)
-                .map_err(CqrsError::user_error)?;
+            agg.apply(event.payload).map_err(CqrsError::user_error)?;
             latest_version = event.version;
         }
         Ok((agg, latest_version))

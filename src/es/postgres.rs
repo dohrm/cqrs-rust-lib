@@ -197,8 +197,7 @@ where
         if let Some(row) = row_opt {
             let data: JsonValue = row.try_get("data").map_err(map_pg_error)?;
             let version: i64 = row.try_get("version").map_err(map_pg_error)?;
-            let state: A =
-                serde_json::from_value(data).map_err(CqrsError::serialization_error)?;
+            let state: A = serde_json::from_value(data).map_err(CqrsError::serialization_error)?;
             Ok(Some(Snapshot::<A> {
                 aggregate_id: aggregate_id.to_string(),
                 state,
@@ -363,8 +362,7 @@ where
                     .try_get::<_, String>("aggregate_id")
                     .map_err(map_pg_error)?,
                 version: row.try_get::<_, i64>("version").map_err(map_pg_error)? as usize,
-                payload: serde_json::from_value(payload)
-                    .map_err(CqrsError::serialization_error)?,
+                payload: serde_json::from_value(payload).map_err(CqrsError::serialization_error)?,
                 metadata: serde_json::from_value(metadata)
                     .map_err(CqrsError::serialization_error)?,
                 at: row.try_get("at").map_err(map_pg_error)?,
@@ -387,10 +385,10 @@ where
             self.journal_table_name
         );
         for e in events.iter() {
-            let payload = serde_json::to_value(&e.payload)
-                .map_err(CqrsError::serialization_error)?;
-            let metadata = serde_json::to_value(&e.metadata)
-                .map_err(CqrsError::serialization_error)?;
+            let payload =
+                serde_json::to_value(&e.payload).map_err(CqrsError::serialization_error)?;
+            let metadata =
+                serde_json::to_value(&e.metadata).map_err(CqrsError::serialization_error)?;
             session
                 .client()
                 .execute(
@@ -416,8 +414,7 @@ where
         version: usize,
         session: &mut Self::Session,
     ) -> Result<(), CqrsError> {
-        let data =
-            serde_json::to_value(aggregate).map_err(CqrsError::serialization_error)?;
+        let data = serde_json::to_value(aggregate).map_err(CqrsError::serialization_error)?;
         let sql = format!(
             "INSERT INTO {} (aggregate_id, data, version) VALUES ($1, $2, $3) \
              ON CONFLICT (aggregate_id) DO UPDATE SET data = EXCLUDED.data, version = EXCLUDED.version",

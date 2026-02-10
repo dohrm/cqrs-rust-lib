@@ -168,8 +168,7 @@ where
         let mut items: Vec<V> = Vec::with_capacity(rows.len());
         for row in rows {
             let val: JsonValue = row.try_get::<_, JsonValue>("data").map_err(map_pg_error)?;
-            let v: V =
-                serde_json::from_value(val).map_err(CqrsError::serialization_error)?;
+            let v: V = serde_json::from_value(val).map_err(CqrsError::serialization_error)?;
             items.push(v);
         }
         Ok(Paged {
@@ -208,8 +207,7 @@ where
             .map_err(map_pg_error)?;
         if let Some(row) = row {
             let val: JsonValue = row.try_get::<_, JsonValue>("data").map_err(map_pg_error)?;
-            let v: V =
-                serde_json::from_value(val).map_err(CqrsError::serialization_error)?;
+            let v: V = serde_json::from_value(val).map_err(CqrsError::serialization_error)?;
             Ok(Some(v))
         } else {
             Ok(None)

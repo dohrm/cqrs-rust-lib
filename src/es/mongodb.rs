@@ -111,9 +111,9 @@ where
             .await
             .map_err(map_mongo_error)?;
 
-        Ok(Box::pin(cursor.map(|result| {
-            result.map_err(CqrsError::database_error)
-        })))
+        Ok(Box::pin(
+            cursor.map(|result| result.map_err(CqrsError::database_error)),
+        ))
     }
 
     async fn fetch_all_events(&self, aggregate_id: &str) -> Result<EventStream<A>, CqrsError> {
@@ -123,9 +123,9 @@ where
             .await
             .map_err(map_mongo_error)?;
 
-        Ok(Box::pin(cursor.map(|result| {
-            result.map_err(CqrsError::database_error)
-        })))
+        Ok(Box::pin(
+            cursor.map(|result| result.map_err(CqrsError::database_error)),
+        ))
     }
 
     async fn fetch_events_paged(
