@@ -75,18 +75,11 @@ impl CqrsContext {
     ///
     /// ## Example Usage
     /// ```rust
-    /// #[cfg(test)]
-    /// mod tests {
-    ///     use super::*;
-    ///     use cqrs_rust_lib::CqrsContext;
+    /// use cqrs_rust_lib::CqrsContext;
     ///
-    ///     #[test]
-    ///     fn test_predictable_uuid() {
-    ///         let context = CqrsContext::default().with_rand_bytes([0; 16]);
-    ///         // Will always generate: "00000000-0000-4000-8000-000000000000"
-    ///         let uuid = context.next_uuid();
-    ///     }
-    /// }
+    /// let context = CqrsContext::default().with_rand_bytes([0; 16]);
+    /// // Will always generate: "00000000-0000-4000-8000-000000000000"
+    /// let uuid = context.next_uuid();
     /// ```
     ///
     /// ## Technical Details
