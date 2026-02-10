@@ -2,15 +2,19 @@
 name = "cqrs-rust-lib"
 authors = ["Michael DOHR"]
 edition = "2024"
-license-file = "LICENSE"
+license = "MIT"
 version = "0.1.0"
+description = "An opinionated implementation of CQRS/Event Sourcing with pluggable storage backends (InMemory, PostgreSQL, MongoDB)"
+repository = "https://github.com/dohrm/cqrs-rust-lib"
+keywords = ["cqrs", "event-sourcing", "aggregate", "ddd"]
+categories = ["database"]
 
 [features]
 all = ["utoipa", "mongodb", "postgres"]
 utoipa = ["dep:axum", "dep:utoipa", "dep:utoipa-axum"]
 mongodb = ["dep:mongodb", "dep:bson"]
 postgres = ["dep:tokio-postgres"]
-mcp = ["dep:rmcp"]
+mcp = ["dep:rmcp", "dep:schemars"]
 
 [dependencies]
 async-trait = "^0.1"
