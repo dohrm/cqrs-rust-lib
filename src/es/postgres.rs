@@ -183,10 +183,7 @@ where
         Ok(())
     }
 
-    async fn fetch_snapshot(
-        &self,
-        aggregate_id: &str,
-    ) -> Result<Option<Snapshot<A>>, CqrsError> {
+    async fn fetch_snapshot(&self, aggregate_id: &str) -> Result<Option<Snapshot<A>>, CqrsError> {
         let conn = self.pool.acquire().await?;
         let sql = format!(
             "SELECT data, version FROM {} WHERE aggregate_id = $1",
@@ -200,8 +197,8 @@ where
         if let Some(row) = row_opt {
             let data: JsonValue = row.try_get("data").map_err(map_pg_error)?;
             let version: i64 = row.try_get("version").map_err(map_pg_error)?;
-            let state: A = serde_json::from_value(data)
-                .map_err(|e| CqrsError::serialization_error(e))?;
+            let state: A =
+                serde_json::from_value(data).map_err(CqrsError::serialization_error)?;
             Ok(Some(Snapshot::<A> {
                 aggregate_id: aggregate_id.to_string(),
                 state,
@@ -240,9 +237,9 @@ where
                         .map_err(map_pg_error)?,
                     version: row.try_get::<_, i64>("version").map_err(map_pg_error)? as usize,
                     payload: serde_json::from_value(payload)
-                        .map_err(|e| CqrsError::serialization_error(e))?,
+                        .map_err(CqrsError::serialization_error)?,
                     metadata: serde_json::from_value(metadata)
-                        .map_err(|e| CqrsError::serialization_error(e))?,
+                        .map_err(CqrsError::serialization_error)?,
                     at: row.try_get("at").map_err(map_pg_error)?,
                 })
             })
@@ -276,9 +273,9 @@ where
                         .map_err(map_pg_error)?,
                     version: row.try_get::<_, i64>("version").map_err(map_pg_error)? as usize,
                     payload: serde_json::from_value(payload)
-                        .map_err(|e| CqrsError::serialization_error(e))?,
+                        .map_err(CqrsError::serialization_error)?,
                     metadata: serde_json::from_value(metadata)
-                        .map_err(|e| CqrsError::serialization_error(e))?,
+                        .map_err(CqrsError::serialization_error)?,
                     at: row.try_get("at").map_err(map_pg_error)?,
                 })
             })
@@ -331,9 +328,9 @@ where
                         .map_err(map_pg_error)?,
                     version: row.try_get::<_, i64>("version").map_err(map_pg_error)? as usize,
                     payload: serde_json::from_value(payload)
-                        .map_err(|e| CqrsError::serialization_error(e))?,
+                        .map_err(CqrsError::serialization_error)?,
                     metadata: serde_json::from_value(metadata)
-                        .map_err(|e| CqrsError::serialization_error(e))?,
+                        .map_err(CqrsError::serialization_error)?,
                     at: row.try_get("at").map_err(map_pg_error)?,
                 })
             })
@@ -367,9 +364,9 @@ where
                     .map_err(map_pg_error)?,
                 version: row.try_get::<_, i64>("version").map_err(map_pg_error)? as usize,
                 payload: serde_json::from_value(payload)
-                    .map_err(|e| CqrsError::serialization_error(e))?,
+                    .map_err(CqrsError::serialization_error)?,
                 metadata: serde_json::from_value(metadata)
-                    .map_err(|e| CqrsError::serialization_error(e))?,
+                    .map_err(CqrsError::serialization_error)?,
                 at: row.try_get("at").map_err(map_pg_error)?,
             }))
         } else {
@@ -391,9 +388,9 @@ where
         );
         for e in events.iter() {
             let payload = serde_json::to_value(&e.payload)
-                .map_err(|err| CqrsError::serialization_error(err))?;
+                .map_err(CqrsError::serialization_error)?;
             let metadata = serde_json::to_value(&e.metadata)
-                .map_err(|err| CqrsError::serialization_error(err))?;
+                .map_err(CqrsError::serialization_error)?;
             session
                 .client()
                 .execute(
@@ -419,8 +416,8 @@ where
         version: usize,
         session: &mut Self::Session,
     ) -> Result<(), CqrsError> {
-        let data = serde_json::to_value(aggregate)
-            .map_err(|e| CqrsError::serialization_error(e))?;
+        let data =
+            serde_json::to_value(aggregate).map_err(CqrsError::serialization_error)?;
         let sql = format!(
             "INSERT INTO {} (aggregate_id, data, version) VALUES ($1, $2, $3) \
              ON CONFLICT (aggregate_id) DO UPDATE SET data = EXCLUDED.data, version = EXCLUDED.version",

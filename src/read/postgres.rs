@@ -146,11 +146,14 @@ where
         let param_offset = owned_params.len() + 1;
         let select_sql = format!(
             "SELECT data FROM {}{}{} OFFSET ${} LIMIT ${}",
-            self.table_name, where_full, order_by, param_offset, param_offset + 1
+            self.table_name,
+            where_full,
+            order_by,
+            param_offset,
+            param_offset + 1
         );
-        let mut select_params: Vec<Box<dyn ToSql + Sync + Send>> = owned_params
-            .into_iter()
-            .collect();
+        let mut select_params: Vec<Box<dyn ToSql + Sync + Send>> =
+            owned_params.into_iter().collect();
         select_params.push(Box::new(offset_v));
         select_params.push(Box::new(limit_v));
         let select_params_ref: Vec<&(dyn ToSql + Sync)> = select_params
@@ -165,8 +168,8 @@ where
         let mut items: Vec<V> = Vec::with_capacity(rows.len());
         for row in rows {
             let val: JsonValue = row.try_get::<_, JsonValue>("data").map_err(map_pg_error)?;
-            let v: V = serde_json::from_value(val)
-                .map_err(|e| CqrsError::serialization_error(e))?;
+            let v: V =
+                serde_json::from_value(val).map_err(CqrsError::serialization_error)?;
             items.push(v);
         }
         Ok(Paged {
@@ -205,8 +208,8 @@ where
             .map_err(map_pg_error)?;
         if let Some(row) = row {
             let val: JsonValue = row.try_get::<_, JsonValue>("data").map_err(map_pg_error)?;
-            let v: V = serde_json::from_value(val)
-                .map_err(|e| CqrsError::serialization_error(e))?;
+            let v: V =
+                serde_json::from_value(val).map_err(CqrsError::serialization_error)?;
             Ok(Some(v))
         } else {
             Ok(None)
@@ -216,8 +219,7 @@ where
     async fn save(&self, entity: V, _context: CqrsContext) -> Result<(), CqrsError> {
         let id = entity.id().to_string();
         let parent_id = entity.parent_id().map(|s| s.to_string());
-        let data = serde_json::to_value(&entity)
-            .map_err(|e| CqrsError::serialization_error(e))?;
+        let data = serde_json::to_value(&entity).map_err(CqrsError::serialization_error)?;
         // Remove id key from data if exists (to keep canonical form in data column)
         let mut data_obj = data;
         if let Some(obj) = data_obj.as_object_mut() {
@@ -308,8 +310,8 @@ where
     }
 
     async fn save(&self, _entity: A, _context: CqrsContext) -> Result<(), CqrsError> {
-        Err(CqrsError::database_error(
-            StorageError::UnsupportedMethod("SnapshotStorage#save".to_string()),
-        ))
+        Err(CqrsError::database_error(StorageError::UnsupportedMethod(
+            "SnapshotStorage#save".to_string(),
+        )))
     }
 }

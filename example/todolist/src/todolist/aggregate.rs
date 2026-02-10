@@ -114,23 +114,26 @@ impl CommandHandler for TodoList {
             }
             UpdateCommands::RemoveTodo { todo_id } => {
                 if !self.todos.iter().any(|t| t.id == todo_id) {
-                    return Err(ErrorCode::TodoNotFound
-                        .error(format!("Todo '{}' not found", todo_id)));
+                    return Err(
+                        ErrorCode::TodoNotFound.error(format!("Todo '{}' not found", todo_id))
+                    );
                 }
                 Ok(vec![Events::TodoRemoved { todo_id }])
             }
             UpdateCommands::AssignTodo { todo_id, assignee } => {
                 if !self.todos.iter().any(|t| t.id == todo_id) {
-                    return Err(ErrorCode::TodoNotFound
-                        .error(format!("Todo '{}' not found", todo_id)));
+                    return Err(
+                        ErrorCode::TodoNotFound.error(format!("Todo '{}' not found", todo_id))
+                    );
                 }
                 Ok(vec![Events::TodoAssignedTo { todo_id, assignee }])
             }
             UpdateCommands::ResolveTodo { todo_id } => {
                 let todo = self.todos.iter().find(|t| t.id == todo_id);
                 match todo {
-                    None => Err(ErrorCode::TodoNotFound
-                        .error(format!("Todo '{}' not found", todo_id))),
+                    None => {
+                        Err(ErrorCode::TodoNotFound.error(format!("Todo '{}' not found", todo_id)))
+                    }
                     Some(t) if t.resolved => Err(ErrorCode::TodoAlreadyResolved
                         .error(format!("Todo '{}' is already resolved", todo_id))),
                     _ => Ok(vec![Events::TodoResolved { todo_id }]),

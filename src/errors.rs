@@ -78,28 +78,11 @@ pub trait CqrsErrorCode: Debug + Display + Clone + Send + Sync + 'static {
 // CqrsError - Unified Error Struct
 // ============================================
 
-/// Unified error for API responses.
-///
-/// This struct is domain-agnostic and provides a consistent JSON format
-/// for all API error responses. It can be created from any domain-specific
-/// error code via `CqrsError::from_code()`.
-///
-/// # JSON Format
-///
-/// ```json
-/// {
-///   "domain": "plan",
-///   "code": "PLAN_NOT_FOUND",
-///   "internalCode": 4001,
-///   "message": "Tenant with ID 'abc' not found",
-///   "details": { "id": "abc" },
-///   "requestId": "req-123"
-/// }
-/// ```
+/// Internal data for `CqrsError`. Access fields via `Deref` on `CqrsError`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "utoipa", derive(ToSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct CqrsError {
+pub struct CqrsErrorData {
     /// Domain this error originated from (e.g., "plan", "user")
     pub domain: String,
 
@@ -125,10 +108,58 @@ pub struct CqrsError {
     pub request_id: Option<String>,
 }
 
+/// Unified error for API responses.
+///
+/// This is a thin wrapper around `Box<CqrsErrorData>` to keep `Result<_, CqrsError>`
+/// small on the stack. Access fields via `Deref` (e.g. `err.domain`, `err.code`).
+///
+/// # JSON Format
+///
+/// ```json
+/// {
+///   "domain": "plan",
+///   "code": "PLAN_NOT_FOUND",
+///   "internalCode": 4001,
+///   "message": "Tenant with ID 'abc' not found",
+///   "details": { "id": "abc" },
+///   "requestId": "req-123"
+/// }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct CqrsError(Box<CqrsErrorData>);
+
+impl std::ops::Deref for CqrsError {
+    type Target = CqrsErrorData;
+    fn deref(&self) -> &CqrsErrorData {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for CqrsError {
+    fn deref_mut(&mut self) -> &mut CqrsErrorData {
+        &mut self.0
+    }
+}
+
+#[cfg(feature = "utoipa")]
+impl utoipa::PartialSchema for CqrsError {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        CqrsErrorData::schema()
+    }
+}
+
+#[cfg(feature = "utoipa")]
+impl utoipa::ToSchema for CqrsError {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("CqrsError")
+    }
+}
+
 impl CqrsError {
     /// Create a CqrsError from any domain error code.
     pub fn from_code<C: CqrsErrorCode>(code: &C, message: impl Into<String>) -> Self {
-        Self {
+        Self(Box::new(CqrsErrorData {
             domain: C::domain().to_string(),
             code: code.code_string(),
             internal_code: code.internal_code(),
@@ -136,7 +167,7 @@ impl CqrsError {
             message: message.into(),
             details: None,
             request_id: None,
-        }
+        }))
     }
 
     /// Add additional details to the error.
@@ -551,7 +582,7 @@ mod tests {
             .with_details(serde_json::json!({"user_id": "123"}));
 
         assert!(err.details.is_some());
-        assert_eq!(err.details.unwrap()["user_id"], "123");
+        assert_eq!(err.details.as_ref().unwrap()["user_id"], "123");
     }
 
     #[test]

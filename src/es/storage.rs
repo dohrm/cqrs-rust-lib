@@ -2,8 +2,7 @@ use crate::{Aggregate, CqrsError, EventEnvelope, Snapshot};
 use futures::stream::Stream;
 use std::pin::Pin;
 
-pub type EventStream<A> =
-    Pin<Box<dyn Stream<Item = Result<EventEnvelope<A>, CqrsError>> + Send>>;
+pub type EventStream<A> = Pin<Box<dyn Stream<Item = Result<EventEnvelope<A>, CqrsError>> + Send>>;
 
 #[async_trait::async_trait]
 pub trait EventStoreStorage<A>
@@ -14,10 +13,7 @@ where
 
     async fn start_session(&self) -> Result<Self::Session, CqrsError>;
     async fn close_session(&self, session: Self::Session) -> Result<(), CqrsError>;
-    async fn fetch_snapshot(
-        &self,
-        aggregate_id: &str,
-    ) -> Result<Option<Snapshot<A>>, CqrsError>;
+    async fn fetch_snapshot(&self, aggregate_id: &str) -> Result<Option<Snapshot<A>>, CqrsError>;
 
     async fn fetch_events_from_version(
         &self,

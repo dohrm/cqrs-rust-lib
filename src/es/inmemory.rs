@@ -45,10 +45,7 @@ where
         Ok(())
     }
 
-    async fn fetch_snapshot(
-        &self,
-        aggregate_id: &str,
-    ) -> Result<Option<Snapshot<A>>, CqrsError> {
+    async fn fetch_snapshot(&self, aggregate_id: &str) -> Result<Option<Snapshot<A>>, CqrsError> {
         let snapshot = self.snapshot.lock().await;
         Ok(snapshot.get(aggregate_id).cloned())
     }

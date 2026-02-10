@@ -75,6 +75,15 @@ src/context.rs            # CqrsContext
 - `EventStoreStorage` is the low-level trait; `EventStore` is the high-level trait used by the engine
 - `DynEventStore<A>` = `Box<dyn EventStore<A>>` (dyn-compatible)
 
+## Quality Checks
+
+After completing any task, always run:
+
+```bash
+cargo fmt --all -- --check                                  # formatting
+cargo clippy --all-features --all-targets -- -D warnings    # lints
+```
+
 ## Examples
 
 - `example/bank/`: MongoDB, domain errors (prefix 10), Account aggregate

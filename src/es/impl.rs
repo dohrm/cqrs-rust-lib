@@ -104,10 +104,7 @@ where
     A: Aggregate + 'static,
     P: EventStoreStorage<A> + Send + Sync + Clone + Debug + 'static,
 {
-    async fn load_snapshot(
-        &self,
-        aggregate_id: &str,
-    ) -> Result<Option<Snapshot<A>>, CqrsError> {
+    async fn load_snapshot(&self, aggregate_id: &str) -> Result<Option<Snapshot<A>>, CqrsError> {
         debug!("Loading snapshot for aggregate");
         match self.persist.fetch_snapshot(aggregate_id).await {
             Ok(Some(snapshot)) => {

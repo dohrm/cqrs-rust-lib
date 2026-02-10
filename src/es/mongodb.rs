@@ -93,10 +93,7 @@ where
         session.commit_transaction().await.map_err(map_mongo_error)
     }
 
-    async fn fetch_snapshot(
-        &self,
-        aggregate_id: &str,
-    ) -> Result<Option<Snapshot<A>>, CqrsError> {
+    async fn fetch_snapshot(&self, aggregate_id: &str) -> Result<Option<Snapshot<A>>, CqrsError> {
         self.snapshot_collection(None)
             .find_one(doc! { "_id": aggregate_id})
             .await
@@ -115,7 +112,7 @@ where
             .map_err(map_mongo_error)?;
 
         Ok(Box::pin(cursor.map(|result| {
-            result.map_err(|e| CqrsError::database_error(e))
+            result.map_err(CqrsError::database_error)
         })))
     }
 
@@ -127,7 +124,7 @@ where
             .map_err(map_mongo_error)?;
 
         Ok(Box::pin(cursor.map(|result| {
-            result.map_err(|e| CqrsError::database_error(e))
+            result.map_err(CqrsError::database_error)
         })))
     }
 
@@ -209,9 +206,6 @@ where
     }
 
     async fn abort_session(&self, mut session: Self::Session) -> Result<(), CqrsError> {
-        session
-            .abort_transaction()
-            .await
-            .map_err(map_mongo_error)
+        session.abort_transaction().await.map_err(map_mongo_error)
     }
 }

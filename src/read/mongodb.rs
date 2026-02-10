@@ -229,8 +229,8 @@ where
     }
 
     async fn save(&self, _entity: A, _context: CqrsContext) -> Result<(), CqrsError> {
-        Err(CqrsError::database_error(
-            StorageError::UnsupportedMethod("SnapshotStorage#save".to_string()),
-        ))
+        Err(CqrsError::database_error(StorageError::UnsupportedMethod(
+            "SnapshotStorage#save".to_string(),
+        )))
     }
 }

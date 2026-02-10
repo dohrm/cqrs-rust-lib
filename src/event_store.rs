@@ -13,10 +13,7 @@ pub trait EventStore<A>
 where
     A: Aggregate + 'static,
 {
-    async fn load_snapshot(
-        &self,
-        aggregate_id: &str,
-    ) -> Result<Option<Snapshot<A>>, CqrsError>;
+    async fn load_snapshot(&self, aggregate_id: &str) -> Result<Option<Snapshot<A>>, CqrsError>;
 
     async fn load_events_from_version(
         &self,
@@ -55,7 +52,7 @@ where
         while let Some(event) = event_stream.next().await {
             let event = event?;
             agg.apply(event.payload)
-                .map_err(|e| CqrsError::user_error(e))?;
+                .map_err(CqrsError::user_error)?;
             latest_version = event.version;
         }
         Ok((agg, latest_version))
