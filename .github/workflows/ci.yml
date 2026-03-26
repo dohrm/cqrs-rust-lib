@@ -53,10 +53,10 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - name: Build (default — no features)
-        run: cargo build --target wasm32-unknown-unknown
-      - name: Build (utoipa)
-        run: cargo build --target wasm32-unknown-unknown --features utoipa
+      - name: Build (wasm)
+        run: cargo build --target wasm32-unknown-unknown --features wasm
+      - name: Build (wasm + utoipa)
+        run: cargo build --target wasm32-unknown-unknown --features wasm,utoipa
 
   test:
     name: Test

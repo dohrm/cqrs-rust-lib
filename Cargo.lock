@@ -439,6 +439,7 @@ dependencies = [
  "bson",
  "chrono",
  "futures",
+ "getrandom 0.3.3",
  "http",
  "mongodb",
  "rand 0.9.1",
