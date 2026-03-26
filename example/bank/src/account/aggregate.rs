@@ -1,6 +1,7 @@
 use crate::account::amount::Amount;
 use crate::account::errors::ErrorCode;
 use crate::account::{CreateCommands, Events, UpdateCommands};
+use cqrs_rust_lib::cqrs_async_trait;
 use cqrs_rust_lib::{
     Aggregate, CommandHandler, CqrsContext, CqrsError, CqrsErrorCode, EventEnvelope, View,
 };
@@ -18,7 +19,7 @@ pub struct Account {
     pub closed: bool,
 }
 
-#[async_trait::async_trait]
+cqrs_async_trait! {
 impl Aggregate for Account {
     const TYPE: &'static str = AGGREGATE_TYPE;
 
@@ -56,8 +57,9 @@ impl Aggregate for Account {
         CqrsError::from_status(status, details)
     }
 }
+}
 
-#[async_trait::async_trait]
+cqrs_async_trait! {
 impl CommandHandler for Account {
     type CreateCommand = CreateCommands;
     type UpdateCommand = UpdateCommands;
@@ -118,6 +120,7 @@ impl CommandHandler for Account {
             UpdateCommands::Close => Ok(vec![Self::Event::Closed]),
         }
     }
+}
 }
 
 impl View<Account> for Account {

@@ -1,15 +1,18 @@
-use crate::{Aggregate, CqrsError, EventEnvelope, Snapshot};
+use crate::{Aggregate, CqrsError, EventEnvelope, MaybeSend, MaybeSync, Snapshot};
 use futures::stream::Stream;
 use std::pin::Pin;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub type EventStream<A> = Pin<Box<dyn Stream<Item = Result<EventEnvelope<A>, CqrsError>> + Send>>;
+#[cfg(target_arch = "wasm32")]
+pub type EventStream<A> = Pin<Box<dyn Stream<Item = Result<EventEnvelope<A>, CqrsError>>>>;
 
-#[async_trait::async_trait]
+cqrs_async_trait! {
 pub trait EventStoreStorage<A>
 where
     A: Aggregate + 'static,
 {
-    type Session: Send + Sync;
+    type Session: MaybeSend + MaybeSync;
 
     async fn start_session(&self) -> Result<Self::Session, CqrsError>;
     async fn close_session(&self, session: Self::Session) -> Result<(), CqrsError>;
@@ -52,4 +55,5 @@ where
     async fn abort_session(&self, _session: Self::Session) -> Result<(), CqrsError> {
         Ok(())
     }
+}
 }

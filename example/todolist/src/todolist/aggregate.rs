@@ -1,6 +1,7 @@
 use super::commands::{CreateCommands, UpdateCommands};
 use super::errors::ErrorCode;
 use super::events::Events;
+use cqrs_rust_lib::cqrs_async_trait;
 use cqrs_rust_lib::{
     Aggregate, CommandHandler, CqrsContext, CqrsError, CqrsErrorCode, EventEnvelope, View,
 };
@@ -25,7 +26,7 @@ pub struct Todo {
     pub resolved: bool,
 }
 
-#[async_trait::async_trait]
+cqrs_async_trait! {
 impl Aggregate for TodoList {
     const TYPE: &'static str = AGGREGATE_TYPE;
 
@@ -73,8 +74,9 @@ impl Aggregate for TodoList {
         CqrsError::from_status(status, details)
     }
 }
+}
 
-#[async_trait::async_trait]
+cqrs_async_trait! {
 impl CommandHandler for TodoList {
     type CreateCommand = CreateCommands;
     type UpdateCommand = UpdateCommands;
@@ -141,6 +143,7 @@ impl CommandHandler for TodoList {
             }
         }
     }
+}
 }
 
 impl View<TodoList> for TodoList {

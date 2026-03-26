@@ -1,10 +1,10 @@
-use crate::{Aggregate, CqrsContext, CqrsError, EventEnvelope};
+use crate::{Aggregate, CqrsContext, CqrsError, EventEnvelope, MaybeSend, MaybeSync};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::fmt::Debug;
 
-#[async_trait::async_trait]
-pub trait Dispatcher<A: Aggregate>: Send + Sync {
+cqrs_async_trait! {
+pub trait Dispatcher<A: Aggregate>: MaybeSend + MaybeSync {
     async fn dispatch(
         &self,
         aggregate_id: &str,
@@ -12,9 +12,10 @@ pub trait Dispatcher<A: Aggregate>: Send + Sync {
         context: &CqrsContext,
     ) -> Result<(), CqrsError>;
 }
+}
 
 pub trait View<A: Aggregate>:
-    Debug + Clone + Default + Serialize + DeserializeOwned + Send + Sync
+    Debug + Clone + Default + Serialize + DeserializeOwned + MaybeSend + MaybeSync
 {
     const TYPE: &'static str;
     const IS_CHILD_OF_AGGREGATE: bool;

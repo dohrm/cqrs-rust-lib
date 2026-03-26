@@ -49,9 +49,15 @@ where
     A::Error: Into<CqrsError>,
 {
     store: DynEventStore<A>,
+    #[cfg(not(target_arch = "wasm32"))]
+    dispatchers: Vec<Box<dyn Dispatcher<A> + Send + Sync>>,
+    #[cfg(target_arch = "wasm32")]
     dispatchers: Vec<Box<dyn Dispatcher<A>>>,
     services: A::Services,
+    #[cfg(not(target_arch = "wasm32"))]
     error_handler: Box<dyn Fn(&CqrsError) + Send + Sync>,
+    #[cfg(target_arch = "wasm32")]
+    error_handler: Box<dyn Fn(&CqrsError)>,
 }
 
 impl<A> CqrsCommandEngine<A>
@@ -60,9 +66,10 @@ where
     A::Error: Into<CqrsError>,
 {
     #[must_use]
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new(
         store: DynEventStore<A>,
-        dispatchers: Vec<Box<dyn Dispatcher<A>>>,
+        dispatchers: Vec<Box<dyn Dispatcher<A> + Send + Sync>>,
         services: A::Services,
         error_handler: Box<dyn Fn(&CqrsError) + Send + Sync>,
     ) -> Self {
@@ -74,6 +81,28 @@ where
         }
     }
 
+    #[must_use]
+    #[cfg(target_arch = "wasm32")]
+    pub fn new(
+        store: DynEventStore<A>,
+        dispatchers: Vec<Box<dyn Dispatcher<A>>>,
+        services: A::Services,
+        error_handler: Box<dyn Fn(&CqrsError)>,
+    ) -> Self {
+        Self {
+            store,
+            dispatchers,
+            services,
+            error_handler,
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn append_dispatcher(&mut self, dispatcher: Box<dyn Dispatcher<A> + Send + Sync>) {
+        self.dispatchers.push(dispatcher);
+    }
+
+    #[cfg(target_arch = "wasm32")]
     pub fn append_dispatcher(&mut self, dispatcher: Box<dyn Dispatcher<A>>) {
         self.dispatchers.push(dispatcher);
     }

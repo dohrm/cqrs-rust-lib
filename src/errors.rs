@@ -13,6 +13,7 @@
 
 use http::StatusCode;
 
+use crate::{MaybeSend, MaybeSync};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display};
 use thiserror::Error;
@@ -39,7 +40,7 @@ use utoipa::ToSchema;
 ///     }
 /// }
 /// ```
-pub trait CqrsErrorCode: Debug + Display + Clone + Send + Sync + 'static {
+pub trait CqrsErrorCode: Debug + Display + Clone + MaybeSend + MaybeSync + 'static {
     /// The domain this error belongs to (e.g., "tenant", "license")
     fn domain() -> &'static str;
 

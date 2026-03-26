@@ -121,7 +121,7 @@ mod tests {
         name: String,
     }
 
-    #[async_trait::async_trait]
+    cqrs_async_trait! {
     impl Aggregate for TestAggregate {
         const TYPE: &'static str = "TEST";
 
@@ -147,6 +147,7 @@ mod tests {
         fn error(_status: StatusCode, details: &str) -> Self::Error {
             TestError(details.to_string())
         }
+    }
     }
 
     // Simple view for testing

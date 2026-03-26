@@ -10,35 +10,6 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    services:
-      mongodb:
-        image: mongo:latest
-        ports:
-          - 27017:27017
-      postgres:
-        image: postgres:latest
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_USER: postgres
-          POSTGRES_DB: postgres
-        ports:
-          - 5432:5432
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Run tests
-        run: |
-          cargo test --all-features
-          cargo test -p bank --all-features
-          cargo test -p todolist --all-features
-        env:
-          MONGODB_TEST_URI: mongodb://localhost:27017
-          PG_TEST_URI: postgres://postgres:postgres@localhost:5432/postgres
-
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -60,7 +31,60 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Build
-        run: cargo build --verbose
-      - name: Build with all features
-        run: cargo build --all-features --verbose
+      - name: Build (default features)
+        run: cargo build
+      - name: Build (utoipa only)
+        run: cargo build --features utoipa
+      - name: Build (rest)
+        run: cargo build --features rest
+      - name: Build (postgres)
+        run: cargo build --features postgres
+      - name: Build (mongodb)
+        run: cargo build --features mongodb
+      - name: Build (all features)
+        run: cargo build --all-features
+
+  build-wasm:
+    name: Build WASM
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Build (default — no features)
+        run: cargo build --target wasm32-unknown-unknown
+      - name: Build (utoipa)
+        run: cargo build --target wasm32-unknown-unknown --features utoipa
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    services:
+      mongodb:
+        image: mongo:latest
+        ports:
+          - 27017:27017
+      postgres:
+        image: postgres:latest
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run lib tests
+        run: cargo test --all-features
+      - name: Run bank tests
+        run: cargo test -p bank --all-features
+        env:
+          MONGODB_TEST_URI: mongodb://localhost:27017
+      - name: Run todolist tests
+        run: cargo test -p todolist --all-features
+        env:
+          PG_TEST_URI: postgres://postgres:postgres@localhost:5432/postgres

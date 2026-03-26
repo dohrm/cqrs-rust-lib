@@ -17,11 +17,12 @@ pub trait PgConn: Send + Sync {
     fn client(&self) -> &Client;
 }
 
+cqrs_async_trait! {
 /// Factory / pool of connections.
-#[async_trait::async_trait]
 pub trait PgPool: Send + Sync + Debug + Clone + 'static {
     type Connection: PgConn + Send + Sync + 'static;
     async fn acquire(&self) -> Result<Self::Connection, CqrsError>;
+}
 }
 
 /// Wraps a single `Arc<Client>`. NOT safe for concurrent transactions.
@@ -34,12 +35,13 @@ impl PgConn for SharedClient {
     }
 }
 
-#[async_trait::async_trait]
+cqrs_async_trait! {
 impl PgPool for SharedClient {
     type Connection = SharedClient;
     async fn acquire(&self) -> Result<Self::Connection, CqrsError> {
         Ok(self.clone())
     }
+}
 }
 
 /// Wraps a connection obtained from a `PgPool`, tracking transaction state.
@@ -142,7 +144,7 @@ CREATE INDEX IF NOT EXISTS idx_{journal_table}_agg_ver ON {journal_table}(aggreg
     }
 }
 
-#[async_trait::async_trait]
+cqrs_async_trait! {
 impl<A, P> EventStoreStorage<A> for PostgresPersist<A, P>
 where
     A: Aggregate + 'static,
@@ -427,4 +429,5 @@ where
             .map_err(map_pg_error)?;
         Ok(())
     }
+}
 }

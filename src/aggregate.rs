@@ -1,5 +1,6 @@
 use crate::event::Event;
 use crate::CqrsContext;
+use crate::{MaybeSend, MaybeSync};
 use http::StatusCode;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -7,8 +8,8 @@ use std::fmt::Debug;
 #[cfg(feature = "utoipa")]
 use utoipa::ToSchema;
 
-#[async_trait::async_trait]
-pub trait Aggregate: Default + Debug + Clone + Serialize + DeserializeOwned + Sync + Send {
+cqrs_async_trait! {
+pub trait Aggregate: Default + Debug + Clone + Serialize + DeserializeOwned + MaybeSync + MaybeSend {
     const TYPE: &'static str;
 
     #[cfg(feature = "utoipa")]
@@ -16,7 +17,7 @@ pub trait Aggregate: Default + Debug + Clone + Serialize + DeserializeOwned + Sy
     #[cfg(not(feature = "utoipa"))]
     type Event: Event;
 
-    type Error: std::error::Error + Send + Sync + 'static;
+    type Error: std::error::Error + MaybeSend + MaybeSync + 'static;
 
     fn aggregate_id(&self) -> String;
     fn with_aggregate_id(self, id: String) -> Self;
@@ -25,20 +26,21 @@ pub trait Aggregate: Default + Debug + Clone + Serialize + DeserializeOwned + Sy
 
     fn error(status: StatusCode, details: &str) -> Self::Error;
 }
+}
 
-#[async_trait::async_trait]
+cqrs_async_trait! {
 pub trait CommandHandler: Aggregate {
     #[cfg(feature = "utoipa")]
-    type CreateCommand: DeserializeOwned + Sync + Send + ToSchema;
+    type CreateCommand: DeserializeOwned + MaybeSync + MaybeSend + ToSchema;
     #[cfg(not(feature = "utoipa"))]
-    type CreateCommand: DeserializeOwned + Sync + Send;
+    type CreateCommand: DeserializeOwned + MaybeSync + MaybeSend;
 
     #[cfg(feature = "utoipa")]
-    type UpdateCommand: DeserializeOwned + Sync + Send + ToSchema;
+    type UpdateCommand: DeserializeOwned + MaybeSync + MaybeSend + ToSchema;
     #[cfg(not(feature = "utoipa"))]
-    type UpdateCommand: DeserializeOwned + Sync + Send;
+    type UpdateCommand: DeserializeOwned + MaybeSync + MaybeSend;
 
-    type Services: Send + Sync;
+    type Services: MaybeSend + MaybeSync;
 
     async fn handle_create(
         &self,
@@ -53,4 +55,5 @@ pub trait CommandHandler: Aggregate {
         services: &Self::Services,
         context: &CqrsContext,
     ) -> Result<Vec<Self::Event>, Self::Error>;
+}
 }

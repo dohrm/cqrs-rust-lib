@@ -1,5 +1,5 @@
 use crate::read::storage::{DynStorage, HasId};
-use crate::{Aggregate, CqrsContext, CqrsError, Dispatcher, EventEnvelope, View};
+use crate::{Aggregate, CqrsContext, CqrsError, Dispatcher, EventEnvelope, MaybeSend, MaybeSync, View};
 use serde::de::DeserializeOwned;
 use std::fmt::Debug;
 
@@ -12,7 +12,7 @@ impl<A, V, Q> ViewDispatcher<A, V, Q>
 where
     A: Aggregate,
     V: View<A> + HasId,
-    Q: Clone + Debug + DeserializeOwned + Send + Sync,
+    Q: Clone + Debug + DeserializeOwned + MaybeSend + MaybeSync,
 {
     pub fn new(storage: DynStorage<V, Q>) -> Self {
         Self {
@@ -22,12 +22,12 @@ where
     }
 }
 
-#[async_trait::async_trait]
+cqrs_async_trait! {
 impl<A, V, Q> Dispatcher<A> for ViewDispatcher<A, V, Q>
 where
     A: Aggregate,
     V: View<A> + HasId,
-    Q: Clone + Debug + DeserializeOwned + Send + Sync,
+    Q: Clone + Debug + DeserializeOwned + MaybeSend + MaybeSync,
 {
     async fn dispatch(
         &self,
@@ -48,4 +48,5 @@ where
         }
         Ok(())
     }
+}
 }

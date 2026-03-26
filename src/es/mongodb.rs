@@ -72,7 +72,7 @@ where
     }
 }
 
-#[async_trait::async_trait]
+cqrs_async_trait! {
 impl<A> EventStoreStorage<A> for MongoDBPersist<A>
 where
     A: Aggregate + 'static,
@@ -208,4 +208,5 @@ where
     async fn abort_session(&self, mut session: Self::Session) -> Result<(), CqrsError> {
         session.abort_transaction().await.map_err(map_mongo_error)
     }
+}
 }

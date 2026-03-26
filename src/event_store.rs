@@ -6,9 +6,12 @@ use futures::StreamExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub type DynEventStore<A> = Arc<dyn EventStore<A> + Send + Sync + 'static>;
+#[cfg(target_arch = "wasm32")]
+pub type DynEventStore<A> = Arc<dyn EventStore<A> + 'static>;
 
-#[async_trait::async_trait]
+cqrs_async_trait! {
 pub trait EventStore<A>
 where
     A: Aggregate + 'static,
@@ -65,4 +68,5 @@ where
         version: usize,
         context: &CqrsContext,
     ) -> Result<Vec<EventEnvelope<A>>, CqrsError>;
+}
 }

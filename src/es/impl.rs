@@ -1,5 +1,7 @@
 use crate::es::storage::{EventStoreStorage, EventStream};
-use crate::{Aggregate, CqrsContext, CqrsError, EventEnvelope, EventStore, Snapshot};
+use crate::{
+    Aggregate, CqrsContext, CqrsError, EventEnvelope, EventStore, MaybeSend, MaybeSync, Snapshot,
+};
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -9,7 +11,7 @@ use tracing::{debug, error, info};
 pub struct EventStoreImpl<A, P>
 where
     A: Aggregate + 'static,
-    P: EventStoreStorage<A> + Send + Sync + Clone + Debug + 'static,
+    P: EventStoreStorage<A> + MaybeSend + MaybeSync + Clone + Debug + 'static,
 {
     _phantom: std::marker::PhantomData<(A, P)>,
     persist: P,
@@ -18,7 +20,7 @@ where
 impl<A, P> EventStoreImpl<A, P>
 where
     A: Aggregate + 'static,
-    P: EventStoreStorage<A> + Send + Sync + Clone + Debug + 'static,
+    P: EventStoreStorage<A> + MaybeSend + MaybeSync + Clone + Debug + 'static,
 {
     #[must_use]
     pub fn new(persist: P) -> Arc<Self> {
@@ -98,11 +100,11 @@ where
     }
 }
 
-#[async_trait::async_trait]
+cqrs_async_trait! {
 impl<A, P> EventStore<A> for EventStoreImpl<A, P>
 where
     A: Aggregate + 'static,
-    P: EventStoreStorage<A> + Send + Sync + Clone + Debug + 'static,
+    P: EventStoreStorage<A> + MaybeSend + MaybeSync + Clone + Debug + 'static,
 {
     async fn load_snapshot(&self, aggregate_id: &str) -> Result<Option<Snapshot<A>>, CqrsError> {
         debug!("Loading snapshot for aggregate");
@@ -192,4 +194,5 @@ where
             }
         }
     }
+}
 }

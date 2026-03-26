@@ -64,7 +64,7 @@ pub struct TestAggregate {
     name: String,
 }
 
-#[async_trait::async_trait]
+cqrs_async_trait! {
 impl Aggregate for TestAggregate {
     const TYPE: &'static str = "TEST";
 
@@ -94,8 +94,9 @@ impl Aggregate for TestAggregate {
         details.into()
     }
 }
+}
 
-#[async_trait::async_trait]
+cqrs_async_trait! {
 impl CommandHandler for TestAggregate {
     type CreateCommand = CreateCommand;
     type UpdateCommand = UpdateCommand;
@@ -123,6 +124,7 @@ impl CommandHandler for TestAggregate {
             UpdateCommand::Decrement => Ok(vec![TestEvent::Decremented]),
         }
     }
+}
 }
 
 // Define a test view

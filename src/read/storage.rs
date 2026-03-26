@@ -1,5 +1,5 @@
 use crate::read::Paged;
-use crate::{CqrsContext, CqrsError};
+use crate::{CqrsContext, CqrsError, MaybeSend, MaybeSync};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::fmt::Debug;
@@ -22,12 +22,16 @@ pub trait HasId {
     fn parent_id(&self) -> Option<&str>;
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub type DynStorage<V, Q> = Arc<dyn Storage<V, Q> + Send + Sync>;
-#[async_trait::async_trait]
+#[cfg(target_arch = "wasm32")]
+pub type DynStorage<V, Q> = Arc<dyn Storage<V, Q>>;
+
+cqrs_async_trait! {
 pub trait Storage<V, Q>
 where
-    V: Debug + Clone + Default + Serialize + DeserializeOwned + Send + Sync,
-    Q: Clone + Debug + DeserializeOwned + Send + Sync,
+    V: Debug + Clone + Default + Serialize + DeserializeOwned + MaybeSend + MaybeSync,
+    Q: Clone + Debug + DeserializeOwned + MaybeSend + MaybeSync,
 {
     fn type_name(&self) -> &str;
     async fn filter(
@@ -45,4 +49,5 @@ where
     ) -> Result<Option<V>, CqrsError>;
 
     async fn save(&self, entity: V, context: CqrsContext) -> Result<(), CqrsError>;
+}
 }

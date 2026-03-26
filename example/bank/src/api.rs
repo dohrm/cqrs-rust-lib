@@ -133,7 +133,8 @@ pub async fn start(config: AppConfig) -> Result<(), Box<dyn std::error::Error + 
 
     // CQRS Command
     let accounts_event_store = EventStoreImpl::new(account_es_store);
-    let accounts_effects: Vec<Box<dyn Dispatcher<Account>>> = vec![Box::new(movement_dispatcher)];
+    let accounts_effects: Vec<Box<dyn Dispatcher<Account> + Send + Sync>> =
+        vec![Box::new(movement_dispatcher)];
     let accounts_engine = Arc::new(CqrsCommandEngine::new(
         accounts_event_store.clone(),
         accounts_effects,

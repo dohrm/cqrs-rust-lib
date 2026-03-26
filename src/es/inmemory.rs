@@ -25,7 +25,7 @@ where
     }
 }
 
-#[async_trait::async_trait]
+cqrs_async_trait! {
 impl<A> EventStoreStorage<A> for InMemoryPersist<A>
 where
     A: Aggregate + 'static,
@@ -133,4 +133,5 @@ where
         );
         Ok(())
     }
+}
 }

@@ -84,7 +84,7 @@ where
     }
 }
 
-#[async_trait::async_trait]
+cqrs_async_trait! {
 impl<V, Q, QB> Storage<V, Q> for MongoDbStorage<V, Q, QB>
 where
     V: Debug + Clone + Default + Serialize + DeserializeOwned + Send + Sync + HasId,
@@ -161,6 +161,7 @@ where
         Ok(())
     }
 }
+}
 
 #[derive(Debug, Clone)]
 pub struct MongoDBFromSnapshotStorage<A, Q, QB>
@@ -188,7 +189,7 @@ where
     }
 }
 
-#[async_trait::async_trait]
+cqrs_async_trait! {
 impl<A, Q, QB> Storage<A, Q> for MongoDBFromSnapshotStorage<A, Q, QB>
 where
     A: Aggregate,
@@ -233,4 +234,5 @@ where
             "SnapshotStorage#save".to_string(),
         )))
     }
+}
 }

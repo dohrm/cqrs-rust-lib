@@ -117,7 +117,7 @@ pub async fn start(config: AppConfig) -> Result<(), Box<dyn std::error::Error + 
 
     // CQRS Command
     let event_store = EventStoreImpl::new(es_store);
-    let effects: Vec<Box<dyn Dispatcher<TodoList>>> = vec![];
+    let effects: Vec<Box<dyn Dispatcher<TodoList> + Send + Sync>> = vec![];
     let engine = Arc::new(CqrsCommandEngine::new(
         event_store.clone(),
         effects,

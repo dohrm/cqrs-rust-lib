@@ -84,7 +84,7 @@ where
     }
 }
 
-#[async_trait::async_trait]
+cqrs_async_trait! {
 impl<V, Q, QB> Storage<V, Q> for PostgresStorage<V, Q, QB>
 where
     V: Debug + Clone + Default + Serialize + DeserializeOwned + Send + Sync + HasId,
@@ -240,6 +240,7 @@ where
         Ok(())
     }
 }
+}
 
 #[derive(Debug, Clone)]
 pub struct PostgresFromSnapshotStorage<A, Q, QB>
@@ -267,7 +268,7 @@ where
     }
 }
 
-#[async_trait::async_trait]
+cqrs_async_trait! {
 impl<A, Q, QB> Storage<A, Q> for PostgresFromSnapshotStorage<A, Q, QB>
 where
     A: Aggregate,
@@ -312,4 +313,5 @@ where
             "SnapshotStorage#save".to_string(),
         )))
     }
+}
 }

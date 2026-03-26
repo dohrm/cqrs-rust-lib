@@ -43,7 +43,7 @@ impl<A: Aggregate> Default for InMemoryDispatcher<A> {
     }
 }
 
-#[async_trait::async_trait]
+cqrs_async_trait! {
 impl<A: Aggregate> Dispatcher<A> for InMemoryDispatcher<A> {
     async fn dispatch(
         &self,
@@ -67,6 +67,7 @@ impl<A: Aggregate> Dispatcher<A> for InMemoryDispatcher<A> {
         );
         Ok(())
     }
+}
 }
 
 #[cfg(test)]
