@@ -1,3 +1,4 @@
+use crate::aggregate::{AggregateIdGenerator, DefaultIdGenerator};
 use crate::context::CqrsContext;
 use crate::denormalizer::Dispatcher;
 use crate::errors::CqrsError;
@@ -58,6 +59,10 @@ where
     error_handler: Box<dyn Fn(&CqrsError) + Send + Sync>,
     #[cfg(target_arch = "wasm32")]
     error_handler: Box<dyn Fn(&CqrsError)>,
+    #[cfg(not(target_arch = "wasm32"))]
+    id_generator: Box<dyn AggregateIdGenerator<A> + Send + Sync>,
+    #[cfg(target_arch = "wasm32")]
+    id_generator: Box<dyn AggregateIdGenerator<A>>,
 }
 
 impl<A> CqrsCommandEngine<A>
@@ -78,6 +83,7 @@ where
             dispatchers,
             services,
             error_handler,
+            id_generator: Box::new(DefaultIdGenerator),
         }
     }
 
@@ -94,7 +100,23 @@ where
             dispatchers,
             services,
             error_handler,
+            id_generator: Box::new(DefaultIdGenerator),
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_id_generator(
+        mut self,
+        id_generator: Box<dyn AggregateIdGenerator<A> + Send + Sync>,
+    ) -> Self {
+        self.id_generator = id_generator;
+        self
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn with_id_generator(mut self, id_generator: Box<dyn AggregateIdGenerator<A>>) -> Self {
+        self.id_generator = id_generator;
+        self
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -147,7 +169,7 @@ where
         context: &CqrsContext,
     ) -> Result<String, CqrsError> {
         debug!("Executing create command with metadata");
-        let aggregate_id = context.next_uuid();
+        let aggregate_id = self.id_generator.next_id(&command, context);
         debug!(aggregate_id = %aggregate_id, "Generated new aggregate ID");
 
         let (aggregate, version) = match self.store.initialize_aggregate(&aggregate_id).await {

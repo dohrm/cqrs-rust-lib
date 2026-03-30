@@ -199,6 +199,148 @@ API response:
 
 See `docs/migration_guide/domain_errors.md` for the full migration guide.
 
+## Custom Aggregate ID Generation
+
+By default, aggregate IDs are generated as UUID v4. For patterns like **Association as Aggregate** — where the ID must be deterministic and derived from the command — you can provide a custom `AggregateIdGenerator`.
+
+### Example: UserRight (association between User and Right)
+
+```rust
+use cqrs_rust_lib::{
+    Aggregate, CommandHandler, AggregateIdGenerator, CqrsContext,
+    CqrsError, Event, CqrsCommandEngine,
+    es::{inmemory::InMemoryPersist, EventStoreImpl},
+};
+use serde::{Deserialize, Serialize};
+use http::StatusCode;
+
+// --- Events ---
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum UserRightEvent {
+    Granted { user_id: String, right_id: String },
+    Revoked,
+}
+
+impl Event for UserRightEvent {
+    fn event_type(&self) -> String {
+        match self {
+            Self::Granted { .. } => "granted".into(),
+            Self::Revoked => "revoked".into(),
+        }
+    }
+}
+
+// --- Commands ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GrantRight {
+    pub user_id: String,
+    pub right_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum UserRightUpdateCommand {
+    Revoke,
+}
+
+// --- Aggregate ---
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UserRight {
+    pub id: String,
+    pub user_id: String,
+    pub right_id: String,
+    pub active: bool,
+}
+
+#[async_trait::async_trait]
+impl Aggregate for UserRight {
+    const TYPE: &'static str = "user_right";
+    type Event = UserRightEvent;
+    type Error = CqrsError;
+
+    fn aggregate_id(&self) -> String { self.id.clone() }
+    fn with_aggregate_id(mut self, id: String) -> Self { self.id = id; self }
+
+    fn apply(&mut self, event: Self::Event) -> Result<(), Self::Error> {
+        match event {
+            UserRightEvent::Granted { user_id, right_id } => {
+                self.user_id = user_id;
+                self.right_id = right_id;
+                self.active = true;
+            }
+            UserRightEvent::Revoked => { self.active = false; }
+        }
+        Ok(())
+    }
+
+    fn error(status: StatusCode, details: &str) -> Self::Error {
+        CqrsError::from_status(status, details)
+    }
+}
+
+#[async_trait::async_trait]
+impl CommandHandler for UserRight {
+    type CreateCommand = GrantRight;
+    type UpdateCommand = UserRightUpdateCommand;
+    type Services = ();
+
+    async fn handle_create(
+        &self, cmd: Self::CreateCommand, _svc: &(), _ctx: &CqrsContext,
+    ) -> Result<Vec<Self::Event>, Self::Error> {
+        Ok(vec![UserRightEvent::Granted {
+            user_id: cmd.user_id,
+            right_id: cmd.right_id,
+        }])
+    }
+
+    async fn handle_update(
+        &self, cmd: Self::UpdateCommand, _svc: &(), _ctx: &CqrsContext,
+    ) -> Result<Vec<Self::Event>, Self::Error> {
+        match cmd {
+            UserRightUpdateCommand::Revoke => Ok(vec![UserRightEvent::Revoked]),
+        }
+    }
+}
+```
+
+### Custom ID generator
+
+The aggregate ID is derived from the association components, making it deterministic and idempotent:
+
+```rust
+struct UserRightIdGenerator;
+
+impl AggregateIdGenerator<UserRight> for UserRightIdGenerator {
+    fn next_id(&self, cmd: &GrantRight, _ctx: &CqrsContext) -> String {
+        format!("{}_{}", cmd.user_id, cmd.right_id)
+    }
+}
+```
+
+### Wiring the engine
+
+```rust
+let store = EventStoreImpl::new(InMemoryPersist::<UserRight>::new());
+let engine = CqrsCommandEngine::new(store, vec![], (), Box::new(|_e| {}))
+    .with_id_generator(Box::new(UserRightIdGenerator));
+
+let ctx = CqrsContext::default();
+
+// The aggregate ID will be "user_42_right_7" (deterministic)
+let id = engine.execute_create(
+    GrantRight { user_id: "user_42".into(), right_id: "right_7".into() },
+    &ctx,
+).await?;
+assert_eq!(id, "user_42_right_7");
+
+// Later, revoke using the same deterministic ID
+engine.execute_update(&id, UserRightUpdateCommand::Revoke, &ctx).await?;
+```
+
+Without `with_id_generator`, the engine falls back to UUID v4 generation (default behavior, no breaking change).
+
 ## Storage Backends
 
 ### PostgreSQL (feature: `postgres`)
