@@ -12,13 +12,14 @@ utoipa-axum = "^0.2.0"
 utoipa-swagger-ui = { version = "9.0.2", features = ["axum"] }
 tower-http = { version = "0.6.6", features = ["add-extension", "trace", "cors", "request-id"] }
 tracing = { version = "0.1.41" }
-tracing-subscriber = { version = "0.3.19", features = ["env-filter", "chrono"] }
+tracing-subscriber = { version = ">=0.3.20", features = ["env-filter", "chrono"] }
 clap = { version = "4.5.37", features = ["derive", "env"] }
 # runtime
 tokio = { version = "^1.45.0", features = ["rt-multi-thread", "macros"] }
 tokio-postgres = { version = "0.7.12", features = ["with-serde_json-1", "with-chrono-0_4"] }
-serde_json = "1.0"
-
 thiserror = "2"
 # project
 cqrs-rust-lib = { path = "../..", features = ["rest", "postgres"] }
+
+[package.metadata.cargo-machete]
+ignored = ["thiserror"]

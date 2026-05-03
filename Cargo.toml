@@ -4,13 +4,14 @@ authors = ["Michael DOHR"]
 edition = "2024"
 license = "MIT"
 version = "0.6.0"
-description = "An opinionated implementation of CQRS/Event Sourcing with pluggable storage backends (InMemory, PostgreSQL, MongoDB)"
+description = "An opinionated implementation of CQRS/Event Sourcing with pluggable storage backends (InMemory, PostgreSQL, MongoDB, SurrealDB)"
 repository = "https://github.com/dohrm/cqrs-rust-lib"
 keywords = ["cqrs", "event-sourcing", "aggregate", "ddd"]
 categories = ["database"]
 
 [features]
-all = ["rest", "mongodb", "postgres"]
+all = ["rest", "mongodb", "postgres", "surrealdb"]
+surrealdb = ["dep:surrealdb", "dep:surrealdb-types"]
 utoipa = ["dep:utoipa"]
 rest = ["utoipa", "dep:axum", "dep:utoipa-axum"]
 mongodb = ["dep:mongodb", "dep:bson"]
@@ -39,13 +40,21 @@ bson = { version = "^2.15", features = ["chrono"], optional = true }
 mongodb = { version = "^3.2", features = ["rustls-tls"], optional = true }
 # Postgres client for postgres feature
 tokio-postgres = { version = "^0.7", optional = true, features = ["with-serde_json-1", "with-chrono-0_4"] }
+# SurrealDB for surrealdb feature
+surrealdb = { version = "^3", optional = true }
+surrealdb-types = { version = "^3", optional = true }
 # MCP Server
 rmcp = { version = "^0.6", optional = true, features = ["server"] }
 schemars = { version = "^1", optional = true, features = ["derive"] }
 
 [dev-dependencies]
 tokio = { version = "^1", features = ["rt-multi-thread", "macros"] }
+# Enable in-memory engine for SurrealDB tests
+surrealdb = { version = "^3", features = ["kv-mem"] }
+
+[package.metadata.cargo-machete]
+ignored = ["getrandom", "rmcp", "schemars"]
 
 [workspace]
-members = ["example/bank", "example/todolist"]
+members = ["example/bank", "example/todolist", "example/ludotheque"]
 resolver = "3"

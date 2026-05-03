@@ -128,7 +128,7 @@ mod integration_tests {
                 cqrs_rust_lib::es::postgres::PostgresPersist::<TodoList>::new(Arc::new(client));
             testcases(store).await;
         } else {
-            panic!("PG_TEST_URI not set or connection failed; skipping Postgres test");
+            eprintln!("PG_TEST_URI not set or connection failed — skipping Postgres test");
         }
     }
 

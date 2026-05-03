@@ -11,3 +11,5 @@ pub mod mongodb;
 #[cfg(feature = "postgres")]
 pub mod postgres;
 pub mod storage;
+#[cfg(feature = "surrealdb")]
+pub mod surrealdb;

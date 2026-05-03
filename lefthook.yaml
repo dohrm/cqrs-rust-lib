@@ -1,0 +1,20 @@
+# Quality gates — enforced automatically via git hooks.
+# Install: lefthook install
+
+pre-commit:
+  parallel: true
+  commands:
+    fmt:
+      run: cargo fmt --all --check
+    clippy:
+      run: cargo clippy --workspace -- -D warnings
+    test:
+      run: cargo test --workspace && cargo test -p cqrs-rust-lib --features surrealdb
+
+pre-push:
+  parallel: true
+  commands:
+    deny:
+      run: cargo deny check licenses advisories sources
+    machete:
+      run: cargo machete --skip-target-dir

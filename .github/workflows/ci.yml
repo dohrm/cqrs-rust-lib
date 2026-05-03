@@ -88,3 +88,5 @@ jobs:
         run: cargo test -p todolist --all-features
         env:
           PG_TEST_URI: postgres://postgres:postgres@localhost:5432/postgres
+      - name: Run ludotheque tests
+        run: cargo test -p ludotheque --all-features

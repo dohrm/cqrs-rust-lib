@@ -4,6 +4,8 @@ pub mod inmemory;
 pub mod mongodb;
 #[cfg(feature = "postgres")]
 pub mod postgres;
+#[cfg(feature = "surrealdb")]
+pub mod surrealdb;
 
 pub mod storage;
 pub use r#impl::*;
