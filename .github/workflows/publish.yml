@@ -59,8 +59,8 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           echo "Publishing version $VERSION"
-          cargo set-version -p cqrs-rust-lib "$VERSION" --allow-dirty
+          cargo set-version -p cqrs-rust-lib "$VERSION"
       - name: Publish to crates.io
-        run: cargo publish -p cqrs-rust-lib
+        run: cargo publish -p cqrs-rust-lib --allow-dirty
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_TOKEN }}
