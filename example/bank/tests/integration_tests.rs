@@ -86,13 +86,13 @@ mod integration_tests {
     #[tokio::test]
     async fn test_mongodb_event_store() {
         let db = setup_test_db().await;
-        let store = cqrs_rust_lib::es::mongodb::MongoDBPersist::<Account>::new(db);
+        let store = cqrs_rust_lib::prelude::mongodb::EventStorePersist::<Account>::new(db);
         testcases(store).await;
     }
 
     #[tokio::test]
     async fn test_inmemory_event_store() {
-        let store = cqrs_rust_lib::es::inmemory::InMemoryPersist::<Account>::new();
+        let store = cqrs_rust_lib::prelude::inmemory::EventStorePersist::<Account>::new();
         testcases(store).await;
     }
 }

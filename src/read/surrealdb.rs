@@ -1,9 +1,15 @@
+use crate::read::query::{Pagination, Query};
+use crate::read::sorter::{SortDirection, Sorter};
 use crate::read::storage::{HasId, Storage, StorageError};
 use crate::read::Paged;
 use crate::{Aggregate, CqrsContext, CqrsError, Snapshot};
+use rest_sql::FieldMapper;
+use rest_sql_drivers::surrealdb::SurrealCompiler;
+use rest_sql_drivers::Driver;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
+use std::borrow::Cow;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -15,27 +21,34 @@ fn map_surreal_error(e: surrealdb::Error) -> CqrsError {
     CqrsError::database_error(e)
 }
 
+/// Maps field names with a `data.` prefix — used for CQRS views where entities
+/// are stored under a `data` field in SurrealDB records.
 #[derive(Debug, Clone)]
-pub struct SkipLimit {
-    pub skip: Option<i64>,
-    pub limit: Option<i64>,
-}
+pub struct DataPrefixMapper;
 
-impl SkipLimit {
-    pub fn new(skip: Option<i64>, limit: Option<i64>) -> Self {
-        Self { skip, limit }
+impl FieldMapper for DataPrefixMapper {
+    fn map<'a>(&self, field: &'a str) -> Cow<'a, str> {
+        Cow::Owned(format!("data.{}", field))
     }
 }
 
-/// Query builder for SurrealDB read storage.
-///
-/// Implementations return SurrealQL WHERE fragments with named `$param` placeholders.
-/// Param names must not start with `__cqrs_` (reserved for internal use).
-pub trait SurrealQueryBuilder<Q>: Debug + Clone + Send + Sync {
-    fn to_where(&self, query: &Q, context: &CqrsContext) -> Option<String>;
-    fn to_order_by(&self, query: &Q, context: &CqrsContext) -> Option<String>;
-    fn to_skip_limit(&self, query: &Q, context: &CqrsContext) -> SkipLimit;
-    fn bind_params(&self, query: &Q, context: &CqrsContext) -> Vec<(String, JsonValue)>;
+fn sorters_to_order_by(sort: Option<Vec<Sorter>>, mapper: &impl FieldMapper) -> String {
+    let sorters = match sort {
+        Some(s) if !s.is_empty() => s,
+        _ => return String::new(),
+    };
+    let parts: Vec<String> = sorters
+        .iter()
+        .map(|s| {
+            let field = mapper.map(&s.field);
+            let dir = match s.direction {
+                SortDirection::Asc => "ASC",
+                SortDirection::Desc => "DESC",
+            };
+            format!("{} {}", field, dir)
+        })
+        .collect();
+    format!("ORDER BY {}", parts.join(", "))
 }
 
 #[derive(Debug, serde::Deserialize, SurrealValue)]
@@ -49,38 +62,46 @@ struct DataRow {
 }
 
 #[derive(Debug, Clone)]
-pub struct SurrealDBStorage<V, Q, QB> {
+pub struct SurrealDBStorage<V, Q, M = DataPrefixMapper> {
     _phantom: PhantomData<(V, Q)>,
     db: Surreal<Any>,
     type_name: String,
     table_name: String,
-    query_builder: QB,
+    mapper: M,
 }
 
-impl<V, Q, QB> SurrealDBStorage<V, Q, QB>
+impl<V, Q> SurrealDBStorage<V, Q, DataPrefixMapper> {
+    #[must_use]
+    pub fn new(db: Surreal<Any>, type_name: &str, table_name: &str) -> Self {
+        Self::with_mapper(db, type_name, table_name, DataPrefixMapper)
+    }
+}
+
+impl<V, Q, M> SurrealDBStorage<V, Q, M>
 where
-    V: Debug + Clone + Default + Serialize + DeserializeOwned + Send + Sync + HasId,
-    Q: Debug + Clone + DeserializeOwned + Send,
-    QB: SurrealQueryBuilder<Q>,
+    M: FieldMapper + Debug + Clone + Send + Sync,
 {
     #[must_use]
-    pub fn new(db: Surreal<Any>, type_name: &str, query_builder: QB, table_name: &str) -> Self {
+    pub fn with_mapper(db: Surreal<Any>, type_name: &str, table_name: &str, mapper: M) -> Self {
         Self {
             _phantom: PhantomData,
             db,
             type_name: type_name.to_string(),
             table_name: table_name.to_string(),
-            query_builder,
+            mapper,
         }
     }
 
     fn build_where(
         &self,
-        base_where: Option<String>,
+        user_filter: Option<String>,
         parent_id: &Option<String>,
-    ) -> Result<String, CqrsError> {
+    ) -> Result<String, CqrsError>
+    where
+        V: HasId,
+    {
         let mut clauses: Vec<String> = Vec::new();
-        if let Some(w) = base_where.filter(|w| !w.trim().is_empty()) {
+        if let Some(w) = user_filter.filter(|w| !w.trim().is_empty()) {
             clauses.push(format!("({})", w));
         }
         match (V::parent_field_id(), parent_id) {
@@ -101,11 +122,11 @@ where
 }
 
 cqrs_async_trait! {
-impl<V, Q, QB> Storage<V, Q> for SurrealDBStorage<V, Q, QB>
+impl<V, Q, M> Storage<V, Q> for SurrealDBStorage<V, Q, M>
 where
     V: Debug + Clone + Default + Serialize + DeserializeOwned + Send + Sync + HasId,
-    Q: Clone + Debug + DeserializeOwned + Send + Sync,
-    QB: SurrealQueryBuilder<Q> + Send + Sync,
+    Q: Clone + Debug + DeserializeOwned + Send + Sync + Query,
+    M: FieldMapper + Debug + Clone + Send + Sync,
 {
     fn type_name(&self) -> &str {
         &self.type_name
@@ -115,19 +136,22 @@ where
         &self,
         parent_id: Option<String>,
         query: Q,
-        context: CqrsContext,
+        _context: CqrsContext,
     ) -> Result<Paged<V>, CqrsError> {
-        let user_where = self.query_builder.to_where(&query, &context);
-        let where_clause = self.build_where(user_where, &parent_id)?;
-        let order_by = self
-            .query_builder
-            .to_order_by(&query, &context)
-            .map(|s| format!("ORDER BY {}", s))
-            .unwrap_or_default();
-        let SkipLimit { skip, limit } = self.query_builder.to_skip_limit(&query, &context);
+        let user_filter = match query.filter() {
+            Some(rsql) => Some(
+                SurrealCompiler::new(self.mapper.clone())
+                    .compile(&rsql)
+                    .map_err(|e| CqrsError::internal(e.to_string()))?,
+            ),
+            None => None,
+        };
+        let where_clause = self.build_where(user_filter, &parent_id)?;
+        let order_by = sorters_to_order_by(query.sort(), &self.mapper);
+
+        let Pagination { skip, limit } = query.pagination().unwrap_or_default();
         let limit_v = limit.unwrap_or(20).max(0);
         let offset_v = skip.unwrap_or(0).max(0);
-        let extra_params = self.query_builder.bind_params(&query, &context);
 
         let count_sql = format!(
             "SELECT count() AS cnt FROM {} {} GROUP ALL",
@@ -137,15 +161,11 @@ where
         if let Some(pid) = parent_id.as_ref() {
             count_q = count_q.bind(("__cqrs_parent_id", pid.clone()));
         }
-        for (k, v) in &extra_params {
-            count_q = count_q.bind((k.clone(), v.clone()));
-        }
         let mut r = count_q.await.map_err(map_surreal_error)?;
         let counts: Vec<CountRow> = r.take(0).map_err(map_surreal_error)?;
         let total = counts.first().map(|c| c.cnt).unwrap_or(0);
 
-        // SELECT * so that fields referenced in ORDER BY are projected (SurrealDB v3 requirement).
-        // Extra fields beyond `data` are silently ignored by serde during DataRow deserialization.
+        // SELECT * so fields referenced in ORDER BY are projected (SurrealDB v3 requirement).
         let select_sql = format!(
             "SELECT * FROM {} {} {} LIMIT $__cqrs_limit START $__cqrs_offset",
             self.table_name, where_clause, order_by
@@ -157,9 +177,6 @@ where
             .bind(("__cqrs_offset", offset_v));
         if let Some(pid) = parent_id.as_ref() {
             select_q = select_q.bind(("__cqrs_parent_id", pid.clone()));
-        }
-        for (k, v) in extra_params {
-            select_q = select_q.bind((k, v));
         }
         let mut result = select_q.await.map_err(map_surreal_error)?;
         let rows: Vec<DataRow> = result.take(0).map_err(map_surreal_error)?;
@@ -219,8 +236,6 @@ where
     async fn save(&self, entity: V, _context: CqrsContext) -> Result<(), CqrsError> {
         let id = entity.id().to_string();
         let parent_id = entity.parent_id().map(|s| s.to_string());
-        // Store the full entity in `data` (id included) so deserialization is a simple
-        // serde_json::from_value without manual id re-injection.
         let data = serde_json::to_value(&entity).map_err(CqrsError::serialization_error)?;
         if V::parent_field_id().is_some() && parent_id.is_none() {
             return Err(CqrsError::validation(
@@ -245,28 +260,41 @@ where
 }
 }
 
-/// Wraps `SurrealDBStorage<Snapshot<A>, Q, QB>` and exposes `Storage<A, Q>`, projecting snapshots
-/// to their inner state on read. `save` is intentionally unsupported (snapshots are written by
-/// the event store, not directly).
+/// Wraps `SurrealDBStorage<Snapshot<A>, Q, M>` and exposes `Storage<A, Q>`, projecting snapshots
+/// to their inner state on read. `save` is intentionally unsupported.
 #[derive(Debug, Clone)]
-pub struct SurrealDBFromSnapshotStorage<A, Q, QB>
+pub struct SurrealDBFromSnapshotStorage<A, Q, M = DataPrefixMapper>
 where
     A: Aggregate,
-    Q: Debug + Clone + DeserializeOwned + Send + Sync,
-    QB: SurrealQueryBuilder<Q>,
+    Q: Debug + Clone + DeserializeOwned + Send + Sync + Query,
+    M: FieldMapper + Debug + Clone + Send + Sync,
 {
-    _phantom: PhantomData<(A, Q, QB)>,
-    inner: Arc<SurrealDBStorage<Snapshot<A>, Q, QB>>,
+    _phantom: PhantomData<A>,
+    inner: Arc<SurrealDBStorage<Snapshot<A>, Q, M>>,
 }
 
-impl<A, Q, QB> SurrealDBFromSnapshotStorage<A, Q, QB>
+impl<A, Q> SurrealDBFromSnapshotStorage<A, Q, DataPrefixMapper>
 where
     A: Aggregate,
-    Q: Debug + Clone + DeserializeOwned + Send + Sync,
-    QB: SurrealQueryBuilder<Q>,
+    Q: Debug + Clone + DeserializeOwned + Send + Sync + Query,
 {
     #[must_use]
-    pub fn new(inner: Arc<SurrealDBStorage<Snapshot<A>, Q, QB>>) -> Self {
+    pub fn new(inner: Arc<SurrealDBStorage<Snapshot<A>, Q, DataPrefixMapper>>) -> Self {
+        Self {
+            _phantom: PhantomData,
+            inner,
+        }
+    }
+}
+
+impl<A, Q, M> SurrealDBFromSnapshotStorage<A, Q, M>
+where
+    A: Aggregate,
+    Q: Debug + Clone + DeserializeOwned + Send + Sync + Query,
+    M: FieldMapper + Debug + Clone + Send + Sync,
+{
+    #[must_use]
+    pub fn with_mapper(inner: Arc<SurrealDBStorage<Snapshot<A>, Q, M>>) -> Self {
         Self {
             _phantom: PhantomData,
             inner,
@@ -275,11 +303,11 @@ where
 }
 
 cqrs_async_trait! {
-impl<A, Q, QB> Storage<A, Q> for SurrealDBFromSnapshotStorage<A, Q, QB>
+impl<A, Q, M> Storage<A, Q> for SurrealDBFromSnapshotStorage<A, Q, M>
 where
     A: Aggregate,
-    Q: Debug + Clone + DeserializeOwned + Send + Sync,
-    QB: SurrealQueryBuilder<Q> + Send + Sync,
+    Q: Clone + Debug + DeserializeOwned + Send + Sync + Query,
+    M: FieldMapper + Debug + Clone + Send + Sync,
 {
     fn type_name(&self) -> &str {
         A::TYPE
@@ -314,9 +342,10 @@ where
     }
 
     async fn save(&self, _entity: A, _context: CqrsContext) -> Result<(), CqrsError> {
-        Err(CqrsError::internal(StorageError::UnsupportedMethod(
-            "SurrealDBFromSnapshotStorage#save".to_string(),
-        ).to_string()))
+        Err(CqrsError::internal(
+            StorageError::UnsupportedMethod("SurrealDBFromSnapshotStorage#save".to_string())
+                .to_string(),
+        ))
     }
 }
 }
@@ -325,8 +354,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::read::query::{Pagination, Query};
     use crate::read::storage::Storage;
+    use crate::read::Sorter;
     use crate::CqrsContext;
+    use rest_sql::{Ast, Constraint, Operator, RestSql, Value};
     use serde::{Deserialize, Serialize};
     use surrealdb::engine::any::connect;
 
@@ -354,44 +386,42 @@ mod tests {
         }
     }
 
-    // ── Query builder ────────────────────────────────────────────────────────
+    // ── Query ────────────────────────────────────────────────────────────────
 
     #[derive(Debug, Clone, Default, Serialize, Deserialize)]
     struct ArticleQuery {
         min_score: Option<i32>,
     }
 
-    #[derive(Debug, Clone)]
-    struct ArticleQueryBuilder;
-
-    impl SurrealQueryBuilder<ArticleQuery> for ArticleQueryBuilder {
-        fn to_where(&self, query: &ArticleQuery, _ctx: &CqrsContext) -> Option<String> {
-            query.min_score.map(|_| "data.score >= $qscore".to_string())
+    impl Query for ArticleQuery {
+        fn filter(&self) -> Option<RestSql> {
+            let score = self.min_score?;
+            RestSql::from_ast(Ast::Constraint(Constraint {
+                field: "score".into(),
+                operator: Operator::Gte,
+                value: Value::Int(score as i64),
+            }))
+            .ok()
         }
 
-        fn to_order_by(&self, _q: &ArticleQuery, _ctx: &CqrsContext) -> Option<String> {
-            Some("data.score ASC".to_string())
+        fn pagination(&self) -> Option<Pagination> {
+            Some(Pagination {
+                skip: None,
+                limit: Some(10),
+            })
         }
 
-        fn to_skip_limit(&self, _q: &ArticleQuery, _ctx: &CqrsContext) -> SkipLimit {
-            SkipLimit::new(None, Some(10))
-        }
-
-        fn bind_params(
-            &self,
-            query: &ArticleQuery,
-            _ctx: &CqrsContext,
-        ) -> Vec<(String, serde_json::Value)> {
-            match query.min_score {
-                Some(s) => vec![("qscore".into(), serde_json::json!(s))],
-                None => vec![],
-            }
+        fn sort(&self) -> Option<Vec<Sorter>> {
+            Some(vec![Sorter {
+                field: "score".into(),
+                direction: crate::read::sorter::SortDirection::Asc,
+            }])
         }
     }
 
     // ── Setup helper ─────────────────────────────────────────────────────────
 
-    async fn setup() -> SurrealDBStorage<Article, ArticleQuery, ArticleQueryBuilder> {
+    async fn setup() -> SurrealDBStorage<Article, ArticleQuery> {
         let db = connect("mem://").await.unwrap();
         db.use_ns("test").use_db("test").await.unwrap();
         db.query("DEFINE TABLE IF NOT EXISTS articles SCHEMALESS")
@@ -399,7 +429,7 @@ mod tests {
             .unwrap()
             .check()
             .unwrap();
-        SurrealDBStorage::new(db, "article", ArticleQueryBuilder, "articles")
+        SurrealDBStorage::new(db, "article", "articles")
     }
 
     fn article(id: &str, title: &str, score: i32) -> Article {
@@ -473,7 +503,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn filter_with_min_score_bind_param() {
+    async fn filter_with_min_score() {
         let store = setup().await;
         let ctx = CqrsContext::default();
 
@@ -510,8 +540,6 @@ mod tests {
                 .unwrap();
         }
 
-        // page 1, size 2 — ArticleQueryBuilder always returns limit=10 but we override here
-        // by using a custom query that limits; for now just verify ordering
         let result = store
             .filter(None, ArticleQuery::default(), ctx)
             .await

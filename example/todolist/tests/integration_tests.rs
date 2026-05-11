@@ -124,8 +124,9 @@ mod integration_tests {
     #[tokio::test]
     async fn test_postgres_event_store() {
         if let Some(client) = setup_pg().await {
-            let store =
-                cqrs_rust_lib::es::postgres::PostgresPersist::<TodoList>::new(Arc::new(client));
+            let store = cqrs_rust_lib::prelude::postgres::EventStorePersist::<TodoList>::new(
+                Arc::new(client),
+            );
             testcases(store).await;
         } else {
             eprintln!("PG_TEST_URI not set or connection failed — skipping Postgres test");
@@ -134,7 +135,7 @@ mod integration_tests {
 
     #[tokio::test]
     async fn test_inmemory_event_store() {
-        let store = cqrs_rust_lib::es::inmemory::InMemoryPersist::<TodoList>::new();
+        let store = cqrs_rust_lib::prelude::inmemory::EventStorePersist::<TodoList>::new();
         testcases(store).await;
     }
 }

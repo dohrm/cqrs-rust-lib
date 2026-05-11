@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Rust CQRS/Event Sourcing library with split Aggregate/CommandHandler traits, structured domain errors, and pluggable storage backends (InMemory, PostgreSQL, MongoDB). WASM-compatible by default (no tokio in production deps).
+Rust CQRS/Event Sourcing library with split Aggregate/CommandHandler traits, structured domain errors, and pluggable storage backends (InMemory, PostgreSQL, MongoDB, SurrealDB). WASM-compatible by default (no tokio in production deps).
 
 ## Build & Test
 
@@ -60,12 +60,37 @@ src/es/impl.rs            # EventStoreImpl (generic EventStore implementation)
 src/es/inmemory.rs        # InMemoryPersist
 src/es/postgres.rs        # PostgresPersist (feature: postgres)
 src/es/mongodb.rs         # MongoDBPersist (feature: mongodb)
+src/es/surrealdb.rs       # SurrealDBPersist (feature: surrealdb)
 src/read/storage.rs       # ViewStorage + SnapshotStorage traits
+src/read/memory.rs        # InMemoryViewStore
+src/read/postgres.rs      # PostgresStorage, PostgresFromSnapshotStorage, QueryBuilder (feature: postgres)
+src/read/mongodb.rs       # MongoDbStorage, MongoDBFromSnapshotStorage, QueryBuilder (feature: mongodb)
+src/read/surrealdb.rs     # SurrealDBStorage, SurrealDBFromSnapshotStorage, QueryBuilder (feature: surrealdb)
+src/prelude/mod.rs        # Backend preludes: inmemory, postgres, mongodb, surrealdb
 src/denormalizer.rs       # Dispatcher trait
 src/rest/write_router.rs  # CQRSWriteRouter (feature: rest)
 src/rest/read_router.rs   # CQRSReadRouter (feature: rest)
 src/context.rs            # CqrsContext
 ```
+
+### Backend Preludes
+
+Each backend exposes canonical type aliases via `cqrs_rust_lib::prelude::<backend>`:
+
+| Alias | inmemory | postgres | mongodb | surrealdb |
+|---|---|---|---|---|
+| `EventStorePersist` | ✓ | ✓ | ✓ | ✓ |
+| `ReadStorage` | — | ✓ | ✓ | ✓ |
+| `FromSnapshotStorage` | — | ✓ | ✓ | ✓ |
+| `QueryBuilder` | — | ✓ | ✓ | ✓ |
+
+Swapping the backend requires changing a single import:
+```rust
+use cqrs_rust_lib::prelude::postgres as db;  // or mongodb, surrealdb, inmemory
+// db::EventStorePersist, db::ReadStorage, db::FromSnapshotStorage, db::QueryBuilder
+```
+
+The `QueryBuilder` trait is backend-specific (SQL params vs BSON vs SurrealQL) — it must be reimplemented when swapping backends. Original concrete names (`PostgresPersist`, `MongoDbStorage`, etc.) remain available from their respective modules.
 
 ### Feature Flags
 
@@ -73,6 +98,7 @@ src/context.rs            # CqrsContext
 - `rest`: Axum routers + OpenAPI (implies `utoipa`, native only)
 - `postgres`: PostgresPersist + read utilities (native only)
 - `mongodb`: MongoDBPersist (native only)
+- `surrealdb`: SurrealDBPersist + read utilities (native only)
 - `mcp`: MCP server (experimental)
 - `all`: rest + postgres + mongodb
 
@@ -82,7 +108,7 @@ src/context.rs            # CqrsContext
 - `async-trait` is re-exported as `__async_trait` for the macro; consumers do not need it as a direct dependency
 - Trait bounds use `MaybeSend + MaybeSync` instead of `Send + Sync` in core (non-feature-gated) code
 - Dispatcher/EventStore/Storage `dyn` type aliases use `cfg(target_arch)` for conditional `+ Send + Sync`
-- Feature-gated code (postgres, mongodb) keeps explicit `Send + Sync` bounds (never compiled for WASM)
+- Feature-gated code (postgres, mongodb, surrealdb) keeps explicit `Send + Sync` bounds (never compiled for WASM)
 - Feature-gated utoipa derives: `#[cfg_attr(feature = "utoipa", derive(ToSchema))]`
 - Error results: `Result<_, CqrsError>` everywhere in storage/engine/dispatchers
 - Domain errors in examples use `define_domain_errors!` macro + `From<ErrorCode> for CqrsError`
@@ -90,6 +116,8 @@ src/context.rs            # CqrsContext
 - Event types implement `Event` trait with `fn event_type(&self) -> String`
 - `EventStoreStorage` is the low-level trait; `EventStore` is the high-level trait used by the engine
 - `DynEventStore<A>` = `Arc<dyn EventStore<A> + Send + Sync + 'static>` (native) / `Arc<dyn EventStore<A> + 'static>` (WASM)
+- Read `QueryBuilder` trait is named identically across all backends; each module has its own incompatible signature (SQL vs BSON vs SurrealQL)
+- Prefer `use cqrs_rust_lib::prelude::<backend> as db` in application wiring code; use module-specific paths only when accessing backend-specific APIs (e.g., `PgPool`, `schema()`)
 
 ## Quality Checks
 
@@ -102,8 +130,8 @@ cargo clippy --all-features --all-targets -- -D warnings    # lints
 
 ## Examples
 
-- `example/bank/`: MongoDB, domain errors (prefix 10), Account aggregate
-- `example/todolist/`: PostgreSQL, domain errors (prefix 20), TodoList aggregate, REST API + Swagger
+- `example/bank/`: MongoDB, domain errors (prefix 10), Account aggregate — uses `prelude::mongodb as db`
+- `example/todolist/`: PostgreSQL, domain errors (prefix 20), TodoList aggregate, REST API + Swagger — uses `prelude::postgres as db`
 
 ## Migration Guides
 

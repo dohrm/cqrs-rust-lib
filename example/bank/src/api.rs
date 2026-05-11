@@ -1,7 +1,5 @@
 use crate::account::views::{Movement, MovementQuery};
 use crate::account::{Account, AccountQuery};
-use crate::query_builder_account::QueryBuilderAccount;
-use crate::query_builder_movement::QueryBuilderMovement;
 use axum::body::Body;
 use axum::extract::Request;
 use axum::middleware::Next;
@@ -9,11 +7,10 @@ use axum::response::{Redirect, Response};
 use axum::routing::get;
 use axum::{middleware, Json, Router};
 use cqrs_rust_lib::dispatchers::ViewDispatcher;
-use cqrs_rust_lib::es::mongodb::MongoDBPersist;
 use cqrs_rust_lib::es::EventStoreImpl;
-use cqrs_rust_lib::read::mongodb::{MongoDBFromSnapshotStorage, MongoDbStorage};
+use cqrs_rust_lib::prelude::mongodb as db;
 use cqrs_rust_lib::rest::{CQRSAuditLogRouter, CQRSReadRouter, CQRSWriteRouter};
-use cqrs_rust_lib::{Aggregate, CqrsCommandEngine, CqrsContext, Dispatcher, Snapshot};
+use cqrs_rust_lib::{Aggregate, CqrsCommandEngine, CqrsContext, Dispatcher};
 use http::header::CONTENT_TYPE;
 use http::StatusCode;
 use mongodb::options::ClientOptions;
@@ -106,27 +103,19 @@ pub async fn start(config: AppConfig) -> Result<(), Box<dyn std::error::Error + 
     // Initialize Dependency Injection.
     let database = mongo_database(&config.mongo_uri).await?;
     // Storages
-    let account_es_store = MongoDBPersist::<Account>::new(database.clone());
+    let account_es_store = db::EventStorePersist::<Account>::new(database.clone());
 
-    let account_repository = Arc::new(MongoDBFromSnapshotStorage::new(Arc::new(MongoDbStorage::<
-        Snapshot<Account>,
-        AccountQuery,
-        QueryBuilderAccount,
-    >::new(
-        database.clone(),
-        "accounts",
-        QueryBuilderAccount,
-        account_es_store.snapshot_collection_name(),
-    ))));
+    let account_repository = Arc::new(db::FromSnapshotStorage::<Account, AccountQuery>::new(
+        Arc::new(db::ReadStorage::new(
+            database.clone(),
+            "accounts",
+            account_es_store.snapshot_collection_name(),
+        )),
+    ));
 
-    let movement_repository = Arc::new(MongoDbStorage::<
-        Movement,
-        MovementQuery,
-        QueryBuilderMovement,
-    >::new(
+    let movement_repository = Arc::new(db::ReadStorage::<Movement, MovementQuery>::new(
         database.clone(),
         "movements",
-        QueryBuilderMovement,
         "movements_view",
     ));
     let movement_dispatcher = ViewDispatcher::new(movement_repository.clone());

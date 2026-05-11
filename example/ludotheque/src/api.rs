@@ -1,5 +1,4 @@
 use crate::game::{Game, GameQuery, GameView};
-use crate::query_builder::GameQueryBuilder;
 use axum::body::Body;
 use axum::extract::Request;
 use axum::middleware::Next;
@@ -7,9 +6,8 @@ use axum::response::{Redirect, Response};
 use axum::routing::get;
 use axum::{middleware, Json, Router};
 use cqrs_rust_lib::dispatchers::ViewDispatcher;
-use cqrs_rust_lib::es::surrealdb::SurrealDBPersist;
 use cqrs_rust_lib::es::EventStoreImpl;
-use cqrs_rust_lib::read::surrealdb::SurrealDBStorage;
+use cqrs_rust_lib::prelude::surrealdb as db;
 use cqrs_rust_lib::rest::{CQRSAuditLogRouter, CQRSReadRouter, CQRSWriteRouter};
 use cqrs_rust_lib::{Aggregate, CqrsCommandEngine, CqrsContext, Dispatcher};
 use http::header::CONTENT_TYPE;
@@ -93,7 +91,7 @@ pub async fn start(config: AppConfig) -> Result<(), Box<dyn std::error::Error + 
     db.use_ns("ludotheque").use_db("ludotheque").await?;
 
     // Ensure event store tables exist
-    db.query(SurrealDBPersist::<Game>::schema())
+    db.query(db::EventStorePersist::<Game>::schema())
         .await?
         .check()?;
 
@@ -103,13 +101,12 @@ pub async fn start(config: AppConfig) -> Result<(), Box<dyn std::error::Error + 
         .check()?;
 
     // Event store
-    let es_persist = SurrealDBPersist::<Game>::new(db.clone());
+    let es_persist = db::EventStorePersist::<Game>::new(db.clone());
     let event_store = EventStoreImpl::new(es_persist);
 
     // View storage (shared between read router and dispatcher)
-    let view_storage: Arc<SurrealDBStorage<GameView, GameQuery, GameQueryBuilder>> = Arc::new(
-        SurrealDBStorage::new(db.clone(), Game::TYPE, GameQueryBuilder, "game_view"),
-    );
+    let view_storage: Arc<db::ReadStorage<GameView, GameQuery>> =
+        Arc::new(db::ReadStorage::new(db.clone(), Game::TYPE, "game_view"));
 
     // Dispatcher: keeps GameView in sync with Game events
     let view_dispatcher = ViewDispatcher::<Game, GameView, GameQuery>::new(view_storage.clone());

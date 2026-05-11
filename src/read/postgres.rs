@@ -1,95 +1,120 @@
+use crate::read::query::Query;
+use crate::read::sorter::{SortDirection, Sorter};
 use crate::read::storage::{HasId, Storage, StorageError};
 use crate::read::Paged;
 use crate::{Aggregate, CqrsContext, CqrsError, Snapshot};
+use rest_sql::{FieldMapper, IdentityMapper};
+use rest_sql_drivers::tokio_postgres::PgCompiler;
+use rest_sql_drivers::Driver;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
-
-#[cfg(feature = "postgres")]
 use tokio_postgres::{types::ToSql, Client};
 
 fn map_pg_error<E: std::error::Error + Send + Sync + 'static>(e: E) -> CqrsError {
     CqrsError::database_error(e)
 }
 
-#[derive(Debug, Clone)]
-pub struct SkipLimit {
-    pub skip: Option<i64>,
-    pub limit: Option<i64>,
-}
-
-impl SkipLimit {
-    pub fn new(skip: Option<i64>, limit: Option<i64>) -> Self {
-        Self { skip, limit }
-    }
-}
-
-/// QueryBuilder for PostgreSQL that can turn a query into SQL fragments.
-pub trait QueryBuilder<Q>: Debug + Clone + Send + Sync {
-    /// Returns (where_sql, params), where where_sql does not include the "WHERE" keyword.
-    fn to_where(
-        &self,
-        query: &Q,
-        context: &CqrsContext,
-    ) -> (String, Vec<Box<dyn ToSql + Sync + Send>>);
-    /// Returns ORDER BY clause without the keyword (e.g., "created_at DESC").
-    fn to_order_by(&self, query: &Q, context: &CqrsContext) -> Option<String>;
-    fn to_skip_limit(&self, query: &Q, context: &CqrsContext) -> SkipLimit;
+fn sorters_to_order_by(sort: Option<Vec<Sorter>>, mapper: &impl FieldMapper) -> String {
+    let sorters = match sort {
+        Some(s) if !s.is_empty() => s,
+        _ => return String::new(),
+    };
+    let parts: Vec<String> = sorters
+        .iter()
+        .map(|s| {
+            let field = mapper.map(&s.field);
+            let dir = match s.direction {
+                SortDirection::Asc => "ASC",
+                SortDirection::Desc => "DESC",
+            };
+            format!("{} {}", field, dir)
+        })
+        .collect();
+    format!(" ORDER BY {}", parts.join(", "))
 }
 
 #[derive(Debug, Clone)]
-pub struct PostgresStorage<V, Q, QB> {
+pub struct PostgresStorage<V, Q, M = IdentityMapper> {
     _phantom: PhantomData<(V, Q)>,
     client: Arc<Client>,
     type_name: String,
     table_name: String,
-    query_builder: QB,
+    mapper: M,
 }
 
-impl<V, Q, QB> PostgresStorage<V, Q, QB>
+impl<V, Q> PostgresStorage<V, Q, IdentityMapper> {
+    #[must_use]
+    pub fn new(client: Arc<Client>, type_name: &str, table_name: &str) -> Self {
+        Self::with_mapper(client, type_name, table_name, IdentityMapper)
+    }
+}
+
+impl<V, Q, M> PostgresStorage<V, Q, M>
 where
-    V: Debug + Clone + Default + Serialize + DeserializeOwned + Send + Sync + HasId,
-    Q: Debug + Clone + DeserializeOwned + Send,
-    QB: QueryBuilder<Q>,
+    M: FieldMapper + Debug + Clone + Send + Sync,
 {
     #[must_use]
-    pub fn new(client: Arc<Client>, type_name: &str, query_builder: QB, table_name: &str) -> Self {
+    pub fn with_mapper(client: Arc<Client>, type_name: &str, table_name: &str, mapper: M) -> Self {
         Self {
             _phantom: PhantomData,
             client,
             type_name: type_name.to_string(),
             table_name: table_name.to_string(),
-            query_builder,
-        }
-    }
-
-    fn build_parent_clause(
-        &self,
-        parent_id: &Option<String>,
-        params: &mut Vec<Box<dyn ToSql + Sync + Send>>,
-    ) -> Result<Option<String>, CqrsError> {
-        match (V::parent_field_id(), parent_id) {
-            (Some(_), Some(pid)) => {
-                params.push(Box::new(pid.clone()));
-                Ok(Some(format!("parent_id = ${}", params.len())))
-            }
-            (Some(_), None) => Err(CqrsError::validation(
-                StorageError::MissingParentId.to_string(),
-            )),
-            _ => Ok(None),
+            mapper,
         }
     }
 }
 
+impl<V, Q, M> PostgresStorage<V, Q, M>
+where
+    V: HasId,
+    Q: Query,
+    M: FieldMapper + Debug + Clone + Send + Sync,
+{
+    fn build_filter(
+        &self,
+        query: &Q,
+        parent_id: &Option<String>,
+    ) -> Result<(String, Vec<Box<dyn ToSql + Sync + Send>>), CqrsError> {
+        let (mut where_sql, mut params): (String, Vec<Box<dyn ToSql + Sync + Send>>) =
+            match query.filter() {
+                Some(rsql) => PgCompiler::new(self.mapper.clone())
+                    .compile(&rsql)
+                    .map_err(|e| CqrsError::internal(e.to_string()))?,
+                None => (String::new(), vec![]),
+            };
+
+        match (V::parent_field_id(), parent_id) {
+            (Some(_), Some(pid)) => {
+                params.push(Box::new(pid.clone()));
+                let n = params.len();
+                if where_sql.trim().is_empty() {
+                    where_sql = format!("parent_id = ${}", n);
+                } else {
+                    where_sql = format!("({}) AND parent_id = ${}", where_sql, n);
+                }
+            }
+            (Some(_), None) => {
+                return Err(CqrsError::validation(
+                    StorageError::MissingParentId.to_string(),
+                ));
+            }
+            _ => {}
+        }
+        Ok((where_sql, params))
+    }
+}
+
 cqrs_async_trait! {
-impl<V, Q, QB> Storage<V, Q> for PostgresStorage<V, Q, QB>
+impl<V, Q, M> Storage<V, Q> for PostgresStorage<V, Q, M>
 where
     V: Debug + Clone + Default + Serialize + DeserializeOwned + Send + Sync + HasId,
-    Q: Clone + Debug + DeserializeOwned + Send + Sync,
-    QB: QueryBuilder<Q> + Send + Sync,
+    Q: Clone + Debug + DeserializeOwned + Send + Sync + Query,
+    M: FieldMapper + Debug + Clone + Send + Sync,
 {
     fn type_name(&self) -> &str {
         &self.type_name
@@ -99,39 +124,25 @@ where
         &self,
         parent_id: Option<String>,
         query: Q,
-        context: CqrsContext,
+        _context: CqrsContext,
     ) -> Result<Paged<V>, CqrsError> {
-        let (mut where_sql, mut params) = self.query_builder.to_where(&query, &context);
-        let parent_clause = self.build_parent_clause(&parent_id, &mut params)?;
-        if let Some(pc) = parent_clause {
-            if where_sql.trim().is_empty() {
-                where_sql = pc;
-            } else {
-                where_sql = format!("({}) AND {}", where_sql, pc);
-            }
-        }
+        let (where_sql, params) = self.build_filter(&query, &parent_id)?;
         let where_full = if where_sql.trim().is_empty() {
             String::new()
         } else {
             format!(" WHERE {}", where_sql)
         };
 
-        let SkipLimit { skip, limit } = self.query_builder.to_skip_limit(&query, &context);
-        let order_by = self
-            .query_builder
-            .to_order_by(&query, &context)
-            .map(|s| format!(" ORDER BY {}", s))
-            .unwrap_or_default();
-        let limit_v = limit.unwrap_or(20);
-        let offset_v = skip.unwrap_or(0);
-        let owned_params = params; // keep ownership for boxing
+        let pagination = query.pagination().unwrap_or_default();
+        let limit_v = pagination.limit.unwrap_or(20);
+        let offset_v = pagination.skip.unwrap_or(0);
+        let order_by = sorters_to_order_by(query.sort(), &self.mapper);
 
-        // total count
         let count_sql = format!(
             "SELECT COUNT(*)::BIGINT AS total FROM {}{}",
             self.table_name, where_full
         );
-        let count_params: Vec<&(dyn ToSql + Sync)> = owned_params
+        let count_params: Vec<&(dyn ToSql + Sync)> = params
             .iter()
             .map(|b| b.as_ref() as &(dyn ToSql + Sync))
             .collect();
@@ -142,8 +153,7 @@ where
             .map_err(map_pg_error)?;
         let total: i64 = row.try_get::<_, i64>("total").map_err(map_pg_error)?;
 
-        // page query
-        let param_offset = owned_params.len() + 1;
+        let param_offset = params.len() + 1;
         let select_sql = format!(
             "SELECT data FROM {}{}{} OFFSET ${} LIMIT ${}",
             self.table_name,
@@ -152,8 +162,7 @@ where
             param_offset,
             param_offset + 1
         );
-        let mut select_params: Vec<Box<dyn ToSql + Sync + Send>> =
-            owned_params.into_iter().collect();
+        let mut select_params: Vec<Box<dyn ToSql + Sync + Send>> = params;
         select_params.push(Box::new(offset_v));
         select_params.push(Box::new(limit_v));
         let select_params_ref: Vec<&(dyn ToSql + Sync)> = select_params
@@ -175,11 +184,7 @@ where
             items,
             total,
             page_size: limit_v,
-            page: if limit_v > 0 {
-                (offset_v / limit_v).abs()
-            } else {
-                0
-            },
+            page: if limit_v > 0 { (offset_v / limit_v).abs() } else { 0 },
         })
     }
 
@@ -218,7 +223,6 @@ where
         let id = entity.id().to_string();
         let parent_id = entity.parent_id().map(|s| s.to_string());
         let data = serde_json::to_value(&entity).map_err(CqrsError::serialization_error)?;
-        // Remove id key from data if exists (to keep canonical form in data column)
         let mut data_obj = data;
         if let Some(obj) = data_obj.as_object_mut() {
             obj.remove(V::field_id());
@@ -243,24 +247,38 @@ where
 }
 
 #[derive(Debug, Clone)]
-pub struct PostgresFromSnapshotStorage<A, Q, QB>
+pub struct PostgresFromSnapshotStorage<A, Q, M = IdentityMapper>
 where
     A: Aggregate,
-    Q: Debug + Clone + DeserializeOwned + Send + Sync,
-    QB: QueryBuilder<Q>,
+    Q: Debug + Clone + DeserializeOwned + Send + Sync + Query,
+    M: FieldMapper + Debug + Clone + Send + Sync,
 {
-    _phantom: PhantomData<(A, Q, QB)>,
-    inner: Arc<PostgresStorage<Snapshot<A>, Q, QB>>,
+    _phantom: PhantomData<A>,
+    inner: Arc<PostgresStorage<Snapshot<A>, Q, M>>,
 }
 
-impl<A, Q, QB> PostgresFromSnapshotStorage<A, Q, QB>
+impl<A, Q> PostgresFromSnapshotStorage<A, Q, IdentityMapper>
 where
     A: Aggregate,
-    Q: Debug + Clone + DeserializeOwned + Send + Sync,
-    QB: QueryBuilder<Q>,
+    Q: Debug + Clone + DeserializeOwned + Send + Sync + Query,
 {
     #[must_use]
-    pub fn new(inner: Arc<PostgresStorage<Snapshot<A>, Q, QB>>) -> Self {
+    pub fn new(inner: Arc<PostgresStorage<Snapshot<A>, Q, IdentityMapper>>) -> Self {
+        Self {
+            _phantom: PhantomData,
+            inner,
+        }
+    }
+}
+
+impl<A, Q, M> PostgresFromSnapshotStorage<A, Q, M>
+where
+    A: Aggregate,
+    Q: Debug + Clone + DeserializeOwned + Send + Sync + Query,
+    M: FieldMapper + Debug + Clone + Send + Sync,
+{
+    #[must_use]
+    pub fn with_mapper(inner: Arc<PostgresStorage<Snapshot<A>, Q, M>>) -> Self {
         Self {
             _phantom: PhantomData,
             inner,
@@ -269,11 +287,11 @@ where
 }
 
 cqrs_async_trait! {
-impl<A, Q, QB> Storage<A, Q> for PostgresFromSnapshotStorage<A, Q, QB>
+impl<A, Q, M> Storage<A, Q> for PostgresFromSnapshotStorage<A, Q, M>
 where
     A: Aggregate,
-    Q: Debug + Clone + DeserializeOwned + Send + Sync,
-    QB: QueryBuilder<Q>,
+    Q: Clone + Debug + DeserializeOwned + Send + Sync + Query,
+    M: FieldMapper + Debug + Clone + Send + Sync,
 {
     fn type_name(&self) -> &str {
         A::TYPE
@@ -286,7 +304,6 @@ where
         context: CqrsContext,
     ) -> Result<Paged<A>, CqrsError> {
         let result = self.inner.filter(parent_id, query, context).await?;
-
         Ok(Paged {
             items: result.items.iter().map(|s| s.state.clone()).collect(),
             total: result.total,

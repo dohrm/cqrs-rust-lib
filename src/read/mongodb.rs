@@ -1,9 +1,14 @@
+use crate::read::query::{Pagination, Query};
+use crate::read::sorter::{SortDirection, Sorter};
 use crate::read::storage::{HasId, Storage, StorageError};
 use crate::read::Paged;
 use crate::{Aggregate, CqrsContext, CqrsError, Snapshot};
 use futures::TryStreamExt;
-use mongodb::bson::{doc, to_bson, Document};
-use mongodb::{bson, Database};
+use mongodb::bson::{doc, serialize_to_document, Bson, Document};
+use mongodb::Database;
+use rest_sql::{FieldMapper, IdentityMapper};
+use rest_sql_drivers::mongodb::MongoCompiler;
+use rest_sql_drivers::Driver;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::fmt::Debug;
@@ -14,55 +19,60 @@ fn map_mongo_error(e: mongodb::error::Error) -> CqrsError {
     CqrsError::database_error(e)
 }
 
-fn map_bson_error(e: bson::ser::Error) -> CqrsError {
+fn map_bson_error(e: mongodb::bson::error::Error) -> CqrsError {
     CqrsError::database_error(e)
 }
 
-pub struct SkipLimit {
-    pub skip: Option<u64>,
-    pub limit: Option<i64>,
-}
-
-impl SkipLimit {
-    pub fn new(skip: Option<u64>, limit: Option<i64>) -> Self {
-        Self { skip, limit }
+fn sorters_to_mongo_sort(sort: Option<Vec<Sorter>>, mapper: &impl FieldMapper) -> Option<Document> {
+    let sorters = match sort {
+        Some(s) if !s.is_empty() => s,
+        _ => return None,
+    };
+    let mut doc = Document::new();
+    for s in &sorters {
+        let field = mapper.map(&s.field).into_owned();
+        let dir: i32 = match s.direction {
+            SortDirection::Asc => 1,
+            SortDirection::Desc => -1,
+        };
+        doc.insert(field, Bson::Int32(dir));
     }
-}
-
-pub trait QueryBuilder<Q>: Debug + Clone + Send + Sync {
-    fn to_query(&self, query: &Q, context: &CqrsContext) -> Document;
-    fn to_sort(&self, query: &Q, context: &CqrsContext) -> Option<Document>;
-    fn to_skip_limit(&self, query: &Q, context: &CqrsContext) -> SkipLimit;
+    Some(doc)
 }
 
 #[derive(Debug, Clone)]
-pub struct MongoDbStorage<V, Q, QB> {
+pub struct MongoDbStorage<V, Q, M = IdentityMapper> {
     _phantom: PhantomData<(V, Q)>,
     database: Database,
     type_name: String,
     collection_name: String,
-    query_builder: QB,
+    mapper: M,
 }
 
-impl<V, Q, QB> MongoDbStorage<V, Q, QB>
+impl<V, Q> MongoDbStorage<V, Q, IdentityMapper> {
+    #[must_use]
+    pub fn new(database: Database, type_name: &str, collection_name: &str) -> Self {
+        Self::with_mapper(database, type_name, collection_name, IdentityMapper)
+    }
+}
+
+impl<V, Q, M> MongoDbStorage<V, Q, M>
 where
-    V: Debug + Clone + Default + Serialize + DeserializeOwned + Send + Sync + HasId,
-    Q: Debug + Clone + DeserializeOwned + Send,
-    QB: QueryBuilder<Q>,
+    M: FieldMapper + Debug + Clone + Send + Sync,
 {
     #[must_use]
-    pub fn new(
+    pub fn with_mapper(
         database: Database,
         type_name: &str,
-        query_builder: QB,
         collection_name: &str,
+        mapper: M,
     ) -> Self {
         Self {
             _phantom: PhantomData,
             database,
             type_name: type_name.to_string(),
             collection_name: collection_name.to_string(),
-            query_builder,
+            mapper,
         }
     }
 
@@ -70,7 +80,10 @@ where
         &self,
         base_query: Document,
         parent_id: &Option<String>,
-    ) -> Result<Document, CqrsError> {
+    ) -> Result<Document, CqrsError>
+    where
+        V: HasId,
+    {
         match (V::parent_field_id(), parent_id) {
             (Some(parent_field_id), Some(parent_id)) => {
                 let parent_id_query = doc! {parent_field_id: parent_id};
@@ -85,33 +98,47 @@ where
 }
 
 cqrs_async_trait! {
-impl<V, Q, QB> Storage<V, Q> for MongoDbStorage<V, Q, QB>
+impl<V, Q, M> Storage<V, Q> for MongoDbStorage<V, Q, M>
 where
     V: Debug + Clone + Default + Serialize + DeserializeOwned + Send + Sync + HasId,
-    Q: Clone + Debug + DeserializeOwned + Send + Sync,
-    QB: QueryBuilder<Q> + Send + Sync,
+    Q: Clone + Debug + Send + Sync + Query,
+    M: FieldMapper + Debug + Clone + Send + Sync,
 {
     fn type_name(&self) -> &str {
         &self.type_name
     }
+
     async fn filter(
         &self,
         parent_id: Option<String>,
         query: Q,
-        context: CqrsContext,
+        _context: CqrsContext,
     ) -> Result<Paged<V>, CqrsError> {
         let collection = self.database.collection::<V>(&self.collection_name);
-        let q = self.parent_id_query(self.query_builder.to_query(&query, &context), &parent_id)?;
-        let sort = self.query_builder.to_sort(&query, &context);
-        let SkipLimit { skip, limit } = self.query_builder.to_skip_limit(&query, &context);
+
+        let user_filter = match query.filter() {
+            Some(rsql) => MongoCompiler::new(self.mapper.clone())
+                .compile(&rsql)
+                .unwrap_or_default(),
+            None => Document::new(),
+        };
+        let filter_doc = self.parent_id_query(user_filter, &parent_id)?;
+        let sort_doc = sorters_to_mongo_sort(query.sort(), &self.mapper);
+
+        let Pagination { skip, limit } = query.pagination().unwrap_or_default();
+        let skip_v = skip.unwrap_or(0).max(0) as u64;
+        let limit_v = limit.unwrap_or(20);
+
         let total = collection
-            .count_documents(q.clone())
+            .count_documents(filter_doc.clone())
             .await
             .map_err(map_mongo_error)?;
-        let skip = skip.unwrap_or(0u64);
-        let limit = limit.unwrap_or(20i64);
-        let find = collection.find(q.clone()).skip(skip).limit(limit);
-        let cursor = (if let Some(sort) = sort {
+
+        let find = collection
+            .find(filter_doc.clone())
+            .skip(skip_v)
+            .limit(limit_v);
+        let cursor = (if let Some(sort) = sort_doc {
             find.sort(sort)
         } else {
             find
@@ -123,8 +150,8 @@ where
         Ok(Paged {
             items,
             total: total as i64,
-            page_size: limit,
-            page: ((skip as i64) / limit).abs(),
+            page_size: limit_v,
+            page: if limit_v > 0 { ((skip_v as i64) / limit_v).abs() } else { 0 },
         })
     }
 
@@ -144,16 +171,12 @@ where
     async fn save(&self, entity: V, _context: CqrsContext) -> Result<(), CqrsError> {
         let collection = self.database.collection::<V>(&self.collection_name);
         let id = doc! {V::field_id(): entity.id()};
-        let e = if let Some(entity) = to_bson(&entity).map_err(map_bson_error)?.as_document_mut() {
-            entity.remove(V::field_id());
-            entity.clone()
-        } else {
-            doc! {}
-        };
+        let mut fields = serialize_to_document(&entity).map_err(map_bson_error)?;
+        fields.remove(V::field_id());
         collection
             .update_one(
                 id,
-                doc! {"$set": &e, "$setOnInsert": doc!{V::field_id(): entity.id()}},
+                doc! {"$set": &fields, "$setOnInsert": doc!{V::field_id(): entity.id()}},
             )
             .upsert(true)
             .await
@@ -164,24 +187,38 @@ where
 }
 
 #[derive(Debug, Clone)]
-pub struct MongoDBFromSnapshotStorage<A, Q, QB>
+pub struct MongoDBFromSnapshotStorage<A, Q, M = IdentityMapper>
 where
     A: Aggregate,
-    Q: Debug + Clone + DeserializeOwned + Send + Sync,
-    QB: QueryBuilder<Q>,
+    Q: Debug + Clone + Send + Sync + Query,
+    M: FieldMapper + Debug + Clone + Send + Sync,
 {
-    _phantom: PhantomData<(A, Q, QB)>,
-    inner: Arc<MongoDbStorage<Snapshot<A>, Q, QB>>,
+    _phantom: PhantomData<A>,
+    inner: Arc<MongoDbStorage<Snapshot<A>, Q, M>>,
 }
 
-impl<A, Q, QB> MongoDBFromSnapshotStorage<A, Q, QB>
+impl<A, Q> MongoDBFromSnapshotStorage<A, Q, IdentityMapper>
 where
     A: Aggregate,
-    Q: Debug + Clone + DeserializeOwned + Send + Sync,
-    QB: QueryBuilder<Q>,
+    Q: Debug + Clone + Send + Sync + Query,
 {
     #[must_use]
-    pub fn new(inner: Arc<MongoDbStorage<Snapshot<A>, Q, QB>>) -> Self {
+    pub fn new(inner: Arc<MongoDbStorage<Snapshot<A>, Q, IdentityMapper>>) -> Self {
+        Self {
+            _phantom: PhantomData,
+            inner,
+        }
+    }
+}
+
+impl<A, Q, M> MongoDBFromSnapshotStorage<A, Q, M>
+where
+    A: Aggregate,
+    Q: Debug + Clone + Send + Sync + Query,
+    M: FieldMapper + Debug + Clone + Send + Sync,
+{
+    #[must_use]
+    pub fn with_mapper(inner: Arc<MongoDbStorage<Snapshot<A>, Q, M>>) -> Self {
         Self {
             _phantom: PhantomData,
             inner,
@@ -190,11 +227,11 @@ where
 }
 
 cqrs_async_trait! {
-impl<A, Q, QB> Storage<A, Q> for MongoDBFromSnapshotStorage<A, Q, QB>
+impl<A, Q, M> Storage<A, Q> for MongoDBFromSnapshotStorage<A, Q, M>
 where
     A: Aggregate,
-    Q: Debug + Clone + DeserializeOwned + Send + Sync,
-    QB: QueryBuilder<Q>,
+    Q: Clone + Debug + Send + Sync + Query,
+    M: FieldMapper + Debug + Clone + Send + Sync,
 {
     fn type_name(&self) -> &str {
         self.inner.type_name()
@@ -207,7 +244,6 @@ where
         context: CqrsContext,
     ) -> Result<Paged<A>, CqrsError> {
         let result = self.inner.filter(parent_id, query, context).await?;
-
         Ok(Paged {
             items: result.items.iter().map(|s| s.state.clone()).collect(),
             total: result.total,

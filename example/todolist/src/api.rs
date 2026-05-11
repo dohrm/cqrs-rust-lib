@@ -1,4 +1,3 @@
-use crate::query_builder_todolist::QueryBuilderTodoList;
 use crate::todolist::query::TodoListQuery;
 use crate::todolist::TodoList;
 use axum::body::Body;
@@ -7,9 +6,8 @@ use axum::middleware::Next;
 use axum::response::{Redirect, Response};
 use axum::routing::get;
 use axum::{middleware, Json, Router};
-use cqrs_rust_lib::es::postgres::PostgresPersist;
 use cqrs_rust_lib::es::EventStoreImpl;
-use cqrs_rust_lib::read::postgres::{PostgresFromSnapshotStorage, PostgresStorage};
+use cqrs_rust_lib::prelude::postgres as db;
 use cqrs_rust_lib::rest::{CQRSAuditLogRouter, CQRSReadRouter, CQRSWriteRouter};
 use cqrs_rust_lib::{Aggregate, CqrsCommandEngine, CqrsContext, Dispatcher};
 use http::header::CONTENT_TYPE;
@@ -99,21 +97,18 @@ pub async fn start(config: AppConfig) -> Result<(), Box<dyn std::error::Error + 
 
     // Ensure tables exist
     client
-        .batch_execute(&PostgresPersist::<TodoList>::schema())
+        .batch_execute(&db::EventStorePersist::<TodoList>::schema())
         .await?;
 
     // Storages
-    let es_store = PostgresPersist::<TodoList>::from_client(client.clone());
-    let repository = Arc::new(PostgresFromSnapshotStorage::<
-        TodoList,
-        TodoListQuery,
-        QueryBuilderTodoList,
-    >::new(Arc::new(PostgresStorage::new(
-        client.clone(),
-        TodoList::TYPE,
-        QueryBuilderTodoList,
-        es_store.snapshot_table_name(),
-    ))));
+    let es_store = db::EventStorePersist::<TodoList>::from_client(client.clone());
+    let repository = Arc::new(db::FromSnapshotStorage::<TodoList, TodoListQuery>::new(
+        Arc::new(db::ReadStorage::new(
+            client.clone(),
+            TodoList::TYPE,
+            es_store.snapshot_table_name(),
+        )),
+    ));
 
     // CQRS Command
     let event_store = EventStoreImpl::new(es_store);

@@ -3,14 +3,12 @@ mod integration_tests {
     use chrono::Utc;
     use cqrs_rust_lib::dispatchers::ViewDispatcher;
     use cqrs_rust_lib::es::inmemory::InMemoryPersist;
-    use cqrs_rust_lib::es::surrealdb::SurrealDBPersist;
     use cqrs_rust_lib::es::storage::EventStoreStorage;
     use cqrs_rust_lib::es::EventStoreImpl;
-    use cqrs_rust_lib::read::surrealdb::SurrealDBStorage;
+    use cqrs_rust_lib::prelude::surrealdb as db;
     use cqrs_rust_lib::read::storage::DynStorage;
     use cqrs_rust_lib::{Aggregate, CqrsCommandEngine, CqrsContext, Dispatcher};
     use ludotheque::game::{CreateCommands, Game, GameQuery, GameView, UpdateCommands};
-    use ludotheque::query_builder::GameQueryBuilder;
     use std::fmt::Debug;
     use std::sync::Arc;
     use surrealdb::engine::any::{connect, Any};
@@ -19,7 +17,7 @@ mod integration_tests {
     async fn setup_surreal() -> Surreal<Any> {
         let db = connect("mem://").await.unwrap();
         db.use_ns("test").use_db("test").await.unwrap();
-        db.query(SurrealDBPersist::<Game>::schema())
+        db.query(db::EventStorePersist::<Game>::schema())
             .await
             .unwrap()
             .check()
@@ -160,16 +158,12 @@ mod integration_tests {
     // ─── Test pipeline complet (vue + requêtes) ───────────────────────────────
 
     async fn testcases_full_pipeline(db: Surreal<Any>) {
-        let view_storage: DynStorage<GameView, GameQuery> = Arc::new(SurrealDBStorage::new(
-            db.clone(),
-            Game::TYPE,
-            GameQueryBuilder,
-            "game_view",
-        ));
+        let view_storage: DynStorage<GameView, GameQuery> =
+            Arc::new(db::ReadStorage::new(db.clone(), Game::TYPE, "game_view"));
 
         let view_dispatcher =
             ViewDispatcher::<Game, GameView, GameQuery>::new(view_storage.clone());
-        let es_persist = SurrealDBPersist::<Game>::new(db.clone());
+        let es_persist = db::EventStorePersist::<Game>::new(db.clone());
         let event_store = EventStoreImpl::new(es_persist);
         let effects: Vec<Box<dyn Dispatcher<Game> + Send + Sync>> = vec![Box::new(view_dispatcher)];
         let engine = Arc::new(CqrsCommandEngine::new(
@@ -257,8 +251,6 @@ mod integration_tests {
                 GameQuery {
                     category: None,
                     available: Some(true),
-                    skip: None,
-                    limit: None,
                 },
                 context.clone(),
             )
@@ -274,8 +266,6 @@ mod integration_tests {
                 GameQuery {
                     category: None,
                     available: Some(false),
-                    skip: None,
-                    limit: None,
                 },
                 context.clone(),
             )
@@ -291,8 +281,6 @@ mod integration_tests {
                 GameQuery {
                     category: Some("stratégie".into()),
                     available: None,
-                    skip: None,
-                    limit: None,
                 },
                 context.clone(),
             )
@@ -344,8 +332,6 @@ mod integration_tests {
                 GameQuery {
                     category: None,
                     available: None,
-                    skip: None,
-                    limit: None,
                 },
                 context.clone(),
             )
@@ -359,7 +345,7 @@ mod integration_tests {
     #[tokio::test]
     async fn test_surreal_event_store() {
         let db = setup_surreal().await;
-        let store = SurrealDBPersist::<Game>::new(db);
+        let store = db::EventStorePersist::<Game>::new(db);
         testcases_event_store(store).await;
     }
 

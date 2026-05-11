@@ -48,5 +48,7 @@ mod snapshot;
 pub use snapshot::*;
 pub mod dispatchers;
 
+pub mod prelude;
+pub use rest_sql as rsql;
 #[cfg(test)]
 pub mod testing;

@@ -1,47 +1,37 @@
 # cqrs-rust-lib
 
-A comprehensive Command Query Responsibility Segregation (CQRS) and Event Sourcing library for Rust applications.
+A pragmatic CQRS / Event Sourcing library for Rust with pluggable storage backends, structured domain errors, and REST integration.
 
 ## Features
 
-- CQRS and Event Sourcing core primitives
 - Split `Aggregate` / `CommandHandler` traits (Single Responsibility)
-- Structured domain error system with `CqrsError` and `define_domain_errors!` macro
-- Multiple storage backends:
-  - In-memory (testing/development)
-  - MongoDB (feature: `mongodb`)
-  - PostgreSQL (feature: `postgres`)
-- REST routers with Axum and OpenAPI integration (feature: `utoipa`)
+- Structured domain errors — `CqrsError` + `define_domain_errors!` macro
+- Pluggable storage backends: InMemory, MongoDB, PostgreSQL, SurrealDB
+- Unified `Query` trait — auto-derives filter from struct fields (RSQL under the hood)
+- HTTP Codex convention — `CqrsHttpQuery<Q>` extracts `_q`, `page`, `page_size`, `sort` from HTTP params
+- Backend prelude pattern — swap the entire backend with one `use` line
+- REST routers with Axum and auto-generated OpenAPI/Swagger (feature: `rest`)
 - Audit log router for event history
-- Typed read storage and snapshot support
-- Pluggable dispatchers for denormalization/projections
+- Snapshot support
+- WASM-compatible core (no Tokio in production deps)
 
 ## Installation
 
-Add this to your `Cargo.toml`:
-
 ```toml
 [dependencies]
-cqrs-rust-lib = "0.1.0"
+cqrs-rust-lib = { version = "0.7", features = ["postgres"] }
 ```
 
-### Cargo features
+### Feature flags
 
-| Feature    | Description                                        |
-|------------|----------------------------------------------------|
-| `mongodb`  | MongoDB event persistence                          |
-| `postgres` | PostgreSQL event persistence and read utilities     |
-| `utoipa`   | REST routers and OpenAPI/Swagger integration        |
-| `mcp`      | MCP server integration (experimental)               |
-| `all`      | Enables `utoipa`, `mongodb`, and `postgres`         |
-
-```toml
-# PostgreSQL + REST
-cqrs-rust-lib = { version = "0.1.0", features = ["postgres", "utoipa"] }
-
-# MongoDB only
-cqrs-rust-lib = { version = "0.1.0", features = ["mongodb"] }
-```
+| Feature     | Description                                            |
+|-------------|--------------------------------------------------------|
+| `mongodb`   | MongoDB event store + read storage                     |
+| `postgres`  | PostgreSQL event store + read storage                  |
+| `surrealdb` | SurrealDB event store + read storage                   |
+| `utoipa`    | OpenAPI schema derives only (WASM-compatible)          |
+| `rest`      | Axum routers + OpenAPI (implies `utoipa`, native only) |
+| `all`       | `rest` + `mongodb` + `postgres` + `surrealdb`          |
 
 ## Quick Start
 
@@ -49,10 +39,8 @@ cqrs-rust-lib = { version = "0.1.0", features = ["mongodb"] }
 
 ```rust
 use cqrs_rust_lib::{Aggregate, CommandHandler, CqrsContext, CqrsError, Event};
-use http::StatusCode;
 use serde::{Deserialize, Serialize};
 
-// Events
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AccountEvent {
     Opened { owner: String },
@@ -70,21 +58,12 @@ impl Event for AccountEvent {
     }
 }
 
-// Commands
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum CreateCommand { Open { owner: String } }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum UpdateCommand { Deposit { amount: i64 }, Withdraw { amount: i64 } }
-
-// Aggregate
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Account {
     pub id: String,
     pub balance: i64,
 }
 
-#[async_trait::async_trait]
 impl Aggregate for Account {
     const TYPE: &'static str = "account";
     type Event = AccountEvent;
@@ -101,30 +80,25 @@ impl Aggregate for Account {
         }
         Ok(())
     }
-
-    fn error(status: StatusCode, details: &str) -> Self::Error {
-        CqrsError::from_status(status, details)
-    }
 }
 
-#[async_trait::async_trait]
 impl CommandHandler for Account {
     type CreateCommand = CreateCommand;
     type UpdateCommand = UpdateCommand;
     type Services = ();
 
-    async fn handle_create(
-        &self, command: Self::CreateCommand, _svc: &(), _ctx: &CqrsContext,
-    ) -> Result<Vec<Self::Event>, Self::Error> {
-        match command {
+    async fn handle_create(&self, cmd: CreateCommand, _: &(), _: &CqrsContext)
+        -> Result<Vec<AccountEvent>, CqrsError>
+    {
+        match cmd {
             CreateCommand::Open { owner } => Ok(vec![AccountEvent::Opened { owner }]),
         }
     }
 
-    async fn handle_update(
-        &self, command: Self::UpdateCommand, _svc: &(), _ctx: &CqrsContext,
-    ) -> Result<Vec<Self::Event>, Self::Error> {
-        match command {
+    async fn handle_update(&self, cmd: UpdateCommand, _: &(), _: &CqrsContext)
+        -> Result<Vec<AccountEvent>, CqrsError>
+    {
+        match cmd {
             UpdateCommand::Deposit { amount } => Ok(vec![AccountEvent::Deposited { amount }]),
             UpdateCommand::Withdraw { amount } => Ok(vec![AccountEvent::Withdrawn { amount }]),
         }
@@ -132,27 +106,21 @@ impl CommandHandler for Account {
 }
 ```
 
-### 2. Create the engine and execute commands
+### 2. Execute commands
 
 ```rust
 use cqrs_rust_lib::es::{inmemory::InMemoryPersist, EventStoreImpl};
 use cqrs_rust_lib::{CqrsCommandEngine, CqrsContext};
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let store = EventStoreImpl::new(InMemoryPersist::<Account>::new());
-    let engine = CqrsCommandEngine::new(store, vec![], (), Box::new(|_e| {}));
+let store = EventStoreImpl::new(InMemoryPersist::<Account>::new());
+let engine = CqrsCommandEngine::new(store, vec![], (), Box::new(|_e| {}));
 
-    let ctx = CqrsContext::default();
-    let id = engine.execute_create(CreateCommand::Open { owner: "Alice".into() }, &ctx).await?;
-    engine.execute_update(&id, UpdateCommand::Deposit { amount: 100 }, &ctx).await?;
-    Ok(())
-}
+let ctx = CqrsContext::default();
+let id = engine.execute_create(CreateCommand::Open { owner: "Alice".into() }, &ctx).await?;
+engine.execute_update(&id, UpdateCommand::Deposit { amount: 100 }, &ctx).await?;
 ```
 
 ## Domain Error Codes
-
-Define structured, domain-specific error codes with the `define_domain_errors!` macro:
 
 ```rust
 use cqrs_rust_lib::{define_domain_errors, CqrsError, CqrsErrorCode};
@@ -163,30 +131,16 @@ define_domain_errors! {
     prefix: 10,
     errors: {
         InsufficientFunds => (1, StatusCode::BAD_REQUEST, "INSUFFICIENT_FUNDS"),
-        InvalidAmount     => (2, StatusCode::BAD_REQUEST, "INVALID_AMOUNT"),
-        AccountClosed     => (3, StatusCode::GONE, "ACCOUNT_CLOSED"),
+        AccountClosed     => (3, StatusCode::GONE,        "ACCOUNT_CLOSED"),
     }
 }
 
 impl From<ErrorCode> for CqrsError {
-    fn from(e: ErrorCode) -> Self {
-        e.error(e.to_string())
-    }
+    fn from(e: ErrorCode) -> Self { e.error(e.to_string()) }
 }
 ```
 
-Use in command handlers:
-
-```rust
-if self.balance < amount {
-    return Err(ErrorCode::InsufficientFunds.error(
-        format!("Cannot withdraw {}, balance is {}", amount, self.balance)
-    ));
-}
-```
-
-API response:
-
+Response shape:
 ```json
 {
   "domain": "account",
@@ -197,235 +151,198 @@ API response:
 }
 ```
 
-See `docs/migration_guide/domain_errors.md` for the full migration guide.
+## Backend Preludes
 
-## Custom Aggregate ID Generation
-
-By default, aggregate IDs are generated as UUID v4. For patterns like **Association as Aggregate** — where the ID must be deterministic and derived from the command — you can provide a custom `AggregateIdGenerator`.
-
-### Example: UserRight (association between User and Right)
+Each backend exposes canonical type aliases under `cqrs_rust_lib::prelude::<backend>`.
+**Swapping the backend requires changing a single import line** — the rest of the wiring is identical.
 
 ```rust
-use cqrs_rust_lib::{
-    Aggregate, CommandHandler, AggregateIdGenerator, CqrsContext,
-    CqrsError, Event, CqrsCommandEngine,
-    es::{inmemory::InMemoryPersist, EventStoreImpl},
-};
+// Change only this line to swap backends:
+use cqrs_rust_lib::prelude::postgres as db;
+// use cqrs_rust_lib::prelude::mongodb as db;
+// use cqrs_rust_lib::prelude::surrealdb as db;
+
+// Everything below stays the same:
+let es = db::EventStorePersist::<MyAggregate>::new(connection.clone());
+let repo = Arc::new(db::ReadStorage::<MyView, MyQuery>::new(connection.clone(), "my_view", ...));
+let snap = Arc::new(db::FromSnapshotStorage::<MyAggregate, MyQuery>::new(Arc::clone(&repo)));
+```
+
+| Alias                | inmemory | postgres | mongodb | surrealdb |
+|----------------------|----------|----------|---------|-----------|
+| `EventStorePersist`  | ✓        | ✓        | ✓       | ✓         |
+| `ReadStorage`        | —        | ✓        | ✓       | ✓         |
+| `FromSnapshotStorage`| —        | ✓        | ✓       | ✓         |
+
+The connection setup (client, pool, URI) is necessarily backend-specific and stays outside the prelude.
+
+## Query Trait (Read Side)
+
+`Query` is the unified read-side filter/pagination/sort interface. It requires `Serialize` (supertrait) so that equality filters are auto-derived from struct fields — **no boilerplate needed in most cases**.
+
+```rust
+use cqrs_rust_lib::read::Query;
 use serde::{Deserialize, Serialize};
-use http::StatusCode;
-
-// --- Events ---
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum UserRightEvent {
-    Granted { user_id: String, right_id: String },
-    Revoked,
-}
-
-impl Event for UserRightEvent {
-    fn event_type(&self) -> String {
-        match self {
-            Self::Granted { .. } => "granted".into(),
-            Self::Revoked => "revoked".into(),
-        }
-    }
-}
-
-// --- Commands ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GrantRight {
-    pub user_id: String,
-    pub right_id: String,
+pub struct GameQuery {
+    pub category: Option<String>,   // non-None → category == "value"
+    pub available: Option<bool>,    // non-None → available == true/false
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum UserRightUpdateCommand {
-    Revoke,
-}
-
-// --- Aggregate ---
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct UserRight {
-    pub id: String,
-    pub user_id: String,
-    pub right_id: String,
-    pub active: bool,
-}
-
-#[async_trait::async_trait]
-impl Aggregate for UserRight {
-    const TYPE: &'static str = "user_right";
-    type Event = UserRightEvent;
-    type Error = CqrsError;
-
-    fn aggregate_id(&self) -> String { self.id.clone() }
-    fn with_aggregate_id(mut self, id: String) -> Self { self.id = id; self }
-
-    fn apply(&mut self, event: Self::Event) -> Result<(), Self::Error> {
-        match event {
-            UserRightEvent::Granted { user_id, right_id } => {
-                self.user_id = user_id;
-                self.right_id = right_id;
-                self.active = true;
-            }
-            UserRightEvent::Revoked => { self.active = false; }
-        }
-        Ok(())
-    }
-
-    fn error(status: StatusCode, details: &str) -> Self::Error {
-        CqrsError::from_status(status, details)
-    }
-}
-
-#[async_trait::async_trait]
-impl CommandHandler for UserRight {
-    type CreateCommand = GrantRight;
-    type UpdateCommand = UserRightUpdateCommand;
-    type Services = ();
-
-    async fn handle_create(
-        &self, cmd: Self::CreateCommand, _svc: &(), _ctx: &CqrsContext,
-    ) -> Result<Vec<Self::Event>, Self::Error> {
-        Ok(vec![UserRightEvent::Granted {
-            user_id: cmd.user_id,
-            right_id: cmd.right_id,
-        }])
-    }
-
-    async fn handle_update(
-        &self, cmd: Self::UpdateCommand, _svc: &(), _ctx: &CqrsContext,
-    ) -> Result<Vec<Self::Event>, Self::Error> {
-        match cmd {
-            UserRightUpdateCommand::Revoke => Ok(vec![UserRightEvent::Revoked]),
-        }
-    }
-}
+// Empty impl: filter auto-derived, no pagination override, no sort
+impl Query for GameQuery {}
 ```
 
-### Custom ID generator
-
-The aggregate ID is derived from the association components, making it deterministic and idempotent:
+Override only what you need:
 
 ```rust
-struct UserRightIdGenerator;
+use cqrs_rust_lib::read::{Query, Sorter, SortDirection};
+use cqrs_rust_lib::rsql::{Ast, Constraint, Operator, RestSql, Value};
 
-impl AggregateIdGenerator<UserRight> for UserRightIdGenerator {
-    fn next_id(&self, cmd: &GrantRight, _ctx: &CqrsContext) -> String {
-        format!("{}_{}", cmd.user_id, cmd.right_id)
+impl Query for ProductQuery {
+    // Custom filter: min_price uses >= instead of ==
+    fn filter(&self) -> Option<RestSql> {
+        self.min_price.and_then(|p| {
+            RestSql::from_ast(Ast::Constraint(Constraint {
+                field: "price".into(),
+                operator: Operator::Gte,
+                value: Value::Float(p),
+            })).ok()
+        })
+    }
+
+    // Static default sort — applied when no HTTP sort param is given
+    fn default_sort() -> Option<Vec<Sorter>> {
+        Some(vec![Sorter { field: "name".into(), direction: SortDirection::Asc }])
     }
 }
 ```
 
-### Wiring the engine
+### HTTP Codex convention (`feature: rest`)
+
+`CqrsHttpQuery<Q>` is an Axum extractor that adds `_q` (RSQL), `page`, `page_size`, `sort` on top of any typed `Q`. Use it directly with `CQRSCodexReadRouter`:
 
 ```rust
-let store = EventStoreImpl::new(InMemoryPersist::<UserRight>::new());
-let engine = CqrsCommandEngine::new(store, vec![], (), Box::new(|_e| {}))
-    .with_id_generator(Box::new(UserRightIdGenerator));
+use cqrs_rust_lib::rest::{CQRSCodexReadRouter, CqrsHttpQuery};
 
-let ctx = CqrsContext::default();
-
-// The aggregate ID will be "user_42_right_7" (deterministic)
-let id = engine.execute_create(
-    GrantRight { user_id: "user_42".into(), right_id: "right_7".into() },
-    &ctx,
-).await?;
-assert_eq!(id, "user_42_right_7");
-
-// Later, revoke using the same deterministic ID
-engine.execute_update(&id, UserRightUpdateCommand::Revoke, &ctx).await?;
+// Routes with HTTP Codex params: GET /games?_q=available==true&page=0&page_size=20&sort=-title
+CQRSCodexReadRouter::<Game, GameView, GameQuery>::routes(storage, "games")
 ```
 
-Without `with_id_generator`, the engine falls back to UUID v4 generation (default behavior, no breaking change).
+Filter priority: `_q` (RSQL) AND `Q::filter()` — combined. Sort priority: HTTP `sort` → `Q::sort()` → `Q::default_sort()`.
 
 ## Storage Backends
 
-### PostgreSQL (feature: `postgres`)
+### PostgreSQL
 
 ```rust
-use cqrs_rust_lib::es::{postgres::PostgresPersist, EventStoreImpl};
-use std::sync::Arc;
+use cqrs_rust_lib::prelude::postgres as db;
 use tokio_postgres::NoTls;
 
 let (client, conn) = tokio_postgres::connect("postgres://user:pass@localhost/db", NoTls).await?;
 tokio::spawn(async move { let _ = conn.await; });
 let client = Arc::new(client);
 
-let store = EventStoreImpl::new(PostgresPersist::<Account>::new(client.clone()));
-let engine = CqrsCommandEngine::new(store, vec![], (), Box::new(|_e| {}));
+client.batch_execute(&db::EventStorePersist::<Account>::schema()).await?;
+let es = db::EventStorePersist::<Account>::from_client(client.clone());
 ```
 
-### MongoDB (feature: `mongodb`)
+### MongoDB
 
-Same pattern with `es::mongodb::MongoDBPersist`.
+```rust
+use cqrs_rust_lib::prelude::mongodb as db;
 
-## REST Routers (feature: `utoipa`)
+let options = ClientOptions::parse(uri).await?;
+let db_client = mongodb::Client::with_options(options.clone())?;
+let database = db_client.database(&options.default_database.unwrap());
 
-Axum routers with auto-generated OpenAPI schemas:
+let es = db::EventStorePersist::<Account>::new(database.clone());
+```
 
-- **Write router**: `rest::CQRSWriteRouter::routes(Arc<CqrsCommandEngine<A>>)`
-- **Read router**: `rest::CQRSReadRouter::routes(repository, Aggregate::TYPE)`
-- **Audit log router**: `rest::CQRSAuditLogRouter::routes(event_store, tag)`
+### SurrealDB
+
+```rust
+use cqrs_rust_lib::prelude::surrealdb as db;
+use surrealdb::engine::any::connect;
+
+let surreal = connect(uri).await?;
+surreal.use_ns("myns").use_db("mydb").await?;
+surreal.query(db::EventStorePersist::<Game>::schema()).await?.check()?;
+
+let es = db::EventStorePersist::<Game>::new(surreal.clone());
+```
+
+## REST Routers (feature: `rest`)
+
+```rust
+use cqrs_rust_lib::rest::{CQRSWriteRouter, CQRSReadRouter, CQRSAuditLogRouter, CQRSCodexReadRouter};
+
+// Standard router — typed query params only
+CQRSReadRouter::routes(repository, Aggregate::TYPE)
+
+// Codex router — adds _q, page, page_size, sort HTTP params
+CQRSCodexReadRouter::<A, V, Q>::routes(storage, tag)
+
+// Write + audit
+CQRSWriteRouter::routes(engine)
+CQRSAuditLogRouter::routes(event_store, tag)
+```
 
 See `example/todolist/src/api.rs` for complete wiring with Swagger UI.
 
 ## Architecture
 
 ```
-Aggregate (state + events)     CommandHandler (commands -> events)
+Aggregate (state + events)     CommandHandler (commands → events)
          \                       /
-          CqrsCommandEngine ----+---- EventStore (persist)
-                |                         |
+          CqrsCommandEngine ────── EventStore (persist)
+                │                         │
            Dispatchers              Storage backends
-          (projections)          (InMemory/PG/Mongo)
+          (projections)          (InMemory / PG / Mongo / Surreal)
+                │
+           ReadStorage ← Query (filter + sort + pagination)
 ```
 
 ### Key Types
 
-| Type | Description |
-|------|-------------|
-| `Aggregate` | Domain state, event application, identity |
-| `CommandHandler` | Command processing, business validation |
-| `CqrsCommandEngine` | Orchestrates command execution |
-| `EventStore` / `EventStoreImpl` | Event persistence abstraction |
-| `CqrsError` | Unified structured error type |
-| `CqrsErrorCode` | Trait for domain-specific error codes |
-| `CqrsContext` | Carries user, request ID, correlation |
-| `Dispatcher` | React to persisted events (projections) |
-| `View` / `ViewElements` | Read model projections |
+| Type                            | Description                                          |
+|---------------------------------|------------------------------------------------------|
+| `Aggregate`                     | Domain state, event application, identity            |
+| `CommandHandler`                | Command processing, business validation              |
+| `CqrsCommandEngine`             | Orchestrates command execution                       |
+| `EventStore` / `EventStoreImpl` | Event persistence abstraction                        |
+| `CqrsError`                     | Unified structured error type                        |
+| `CqrsContext`                   | Carries user, request ID, correlation ID             |
+| `Dispatcher`                    | Reacts to persisted events (projections / views)     |
+| `View`                          | Read model projection                                |
+| `Query`                         | Read-side filter / pagination / sort interface       |
+| `CqrsHttpQuery<Q>`              | HTTP Codex extractor wrapping a typed `Q`            |
 
 ## Examples
 
-| Example | Storage | Features |
-|---------|---------|----------|
-| `example/bank` | MongoDB | Domain errors, commands, queries, views |
-| `example/todolist` | PostgreSQL | REST API, Swagger UI, snapshots, integration tests |
-
-### Run todolist
-
-```bash
-cargo run -p todolist -- start --pg-uri="postgres://user:pass@localhost:5432/db" --http-port=8081
-```
-
-### Run tests
+| Example                  | Storage    | Highlights                                                  |
+|--------------------------|------------|-------------------------------------------------------------|
+| `example/bank`           | MongoDB    | Domain errors (prefix 10), views, movements sub-resource   |
+| `example/todolist`       | PostgreSQL | REST API, Swagger UI, snapshots, integration tests          |
+| `example/ludotheque`     | SurrealDB  | Full pipeline: event store + view + filter + sort           |
 
 ```bash
-cargo test             # lib tests
-cargo test -p todolist # integration tests
+cargo run -p todolist    -- start --pg-uri="postgres://..." --http-port=8081
+cargo run -p ludotheque  -- start --surreal-uri="ws://..." --http-port=8082
+
+cargo test               # lib unit tests
+cargo test -p todolist   # todolist integration tests
+cargo test -p ludotheque # ludotheque integration tests
 ```
 
 ## Migration Guides
 
 - [Aggregate / CommandHandler Split](docs/migration_guide/split_aggregate.md)
 - [Domain Error Codes](docs/migration_guide/domain_errors.md)
+- [WASM Compatibility](docs/migration_guide/wasm_compat.md)
+- [Query Trait (0.6 → 0.7)](docs/migration_guide/query_trait.md)
 
 ## License
 
-This project is licensed under the terms found in the [LICENSE](LICENSE) file.
-
-## Contributing
-
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+MIT — see [LICENSE](LICENSE).

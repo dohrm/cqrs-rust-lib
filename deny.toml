@@ -13,15 +13,16 @@ ignore = [
     "RUSTSEC-2026-0104",
     "RUSTSEC-2026-0098",
     "RUSTSEC-2026-0099",
+    "RUSTSEC-2026-0118",
     # slab via tower/quinn/h2 — transitive, cannot pin directly
     "RUSTSEC-2025-0047",
     # rand unsound only when used inside a custom logger impl — not our use case
     "RUSTSEC-2026-0097",
     # unmaintained crates from transitive deps (surrealdb, utoipa-axum, mongodb)
-    "RUSTSEC-2025-0141",  # bincode via surrealdb-core
-    "RUSTSEC-2024-0436",  # paste via utoipa-axum / rmcp
-    "RUSTSEC-2025-0134",  # rustls-pemfile via mongodb
-    "RUSTSEC-2023-0089",  # atomic-polyfill via surrealdb-core
+    "RUSTSEC-2025-0141", # bincode via surrealdb-core
+    "RUSTSEC-2024-0436", # paste via utoipa-axum / rmcp
+    "RUSTSEC-2025-0134", # rustls-pemfile via mongodb
+    "RUSTSEC-2023-0089", # atomic-polyfill via surrealdb-core
 ]
 
 [licenses]

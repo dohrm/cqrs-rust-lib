@@ -5,6 +5,12 @@ use serde::Serialize;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+// DeserializeOwned is kept for V (entity) but NOT required for Q (query).
+// Q's type system contract is Query + Clone + Debug + MaybeSend + MaybeSync.
+// Individual backend impls may add DeserializeOwned to Q if they need it,
+// but the trait itself does not — allowing non-Deserialize query wrappers
+// like CqrsHttpQuery<Q>.
+
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
     #[error("Missing parent id")]
@@ -31,7 +37,7 @@ cqrs_async_trait! {
 pub trait Storage<V, Q>
 where
     V: Debug + Clone + Default + Serialize + DeserializeOwned + MaybeSend + MaybeSync,
-    Q: Clone + Debug + DeserializeOwned + MaybeSend + MaybeSync,
+    Q: Clone + Debug + MaybeSend + MaybeSync,
 {
     fn type_name(&self) -> &str;
     async fn filter(

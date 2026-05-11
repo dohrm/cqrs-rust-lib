@@ -8,9 +8,9 @@ publish = false
 clap = { version = "4.5.37", features = ["derive", "env"] }
 chrono = { version = "^0.4.0", features = ["serde"] }
 http = "^1.3.0"
-mongodb = { version = "^3.2.0", features = ["rustls-tls"] }
+mongodb = { version = "^3.6", default-features = false, features = ["rustls-tls", "bson-3", "dns-resolver", "compat-3-3-0"] }
 serde = { version = "^1.0.0", features = ["serde_derive"] }
-tokio = { version = "^1.45.0", features = ["rt-multi-thread","macros"] }
+tokio = { version = "^1.45.0", features = ["rt-multi-thread", "macros"] }
 utoipa = { version = "5.4.0", features = ["chrono"] }
 utoipa-axum = "^0.2.0"
 utoipa-swagger-ui = { version = "9.0.2", features = ["axum"] }

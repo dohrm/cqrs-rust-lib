@@ -69,9 +69,6 @@ impl View<Account> for Movement {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, IntoParams)]
-pub struct MovementQuery {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub skip: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub limit: Option<i64>,
-}
+pub struct MovementQuery {}
+
+impl cqrs_rust_lib::read::Query for MovementQuery {}

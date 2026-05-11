@@ -1,3 +1,4 @@
+use cqrs_rust_lib::read::{Query, SortDirection, Sorter};
 use serde::{Deserialize, Serialize};
 use utoipa::IntoParams;
 
@@ -5,6 +6,13 @@ use utoipa::IntoParams;
 pub struct GameQuery {
     pub category: Option<String>,
     pub available: Option<bool>,
-    pub skip: Option<i64>,
-    pub limit: Option<i64>,
+}
+
+impl Query for GameQuery {
+    fn default_sort() -> Option<Vec<Sorter>> {
+        Some(vec![Sorter {
+            field: "title".into(),
+            direction: SortDirection::Asc,
+        }])
+    }
 }

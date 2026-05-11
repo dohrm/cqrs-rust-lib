@@ -3,7 +3,7 @@ name = "cqrs-rust-lib"
 authors = ["Michael DOHR"]
 edition = "2024"
 license = "MIT"
-version = "0.6.0"
+version = "0.7.0"
 description = "An opinionated implementation of CQRS/Event Sourcing with pluggable storage backends (InMemory, PostgreSQL, MongoDB, SurrealDB)"
 repository = "https://github.com/dohrm/cqrs-rust-lib"
 keywords = ["cqrs", "event-sourcing", "aggregate", "ddd"]
@@ -11,11 +11,11 @@ categories = ["database"]
 
 [features]
 all = ["rest", "mongodb", "postgres", "surrealdb"]
-surrealdb = ["dep:surrealdb", "dep:surrealdb-types"]
+surrealdb = ["dep:surrealdb", "dep:surrealdb-types", "dep:rest-sql-drivers", "rest-sql-drivers/surrealdb"]
 utoipa = ["dep:utoipa"]
-rest = ["utoipa", "dep:axum", "dep:utoipa-axum"]
-mongodb = ["dep:mongodb", "dep:bson"]
-postgres = ["dep:tokio-postgres"]
+rest = ["utoipa", "dep:axum", "dep:utoipa-axum", "dep:serde_urlencoded", "dep:percent-encoding"]
+mongodb = ["dep:mongodb", "dep:bson", "dep:rest-sql-drivers", "rest-sql-drivers/mongodb"]
+postgres = ["dep:tokio-postgres", "dep:rest-sql-drivers", "rest-sql-drivers/tokio-postgres"]
 mcp = ["dep:rmcp", "dep:schemars"]
 wasm = ["dep:getrandom", "getrandom/wasm_js", "uuid/js", "chrono/wasmbind"]
 
@@ -36,13 +36,18 @@ axum = { version = "^0.8", optional = true }
 utoipa = { version = "^5.4", optional = true }
 utoipa-axum = { version = "^0.2", optional = true }
 # MongoDB for mongodb feature
-bson = { version = "^2.15", features = ["chrono"], optional = true }
-mongodb = { version = "^3.2", features = ["rustls-tls"], optional = true }
+bson = { version = "3", optional = true }
+mongodb = { version = "^3.6", default-features = false, features = ["rustls-tls", "bson-3", "dns-resolver", "compat-3-3-0"], optional = true }
 # Postgres client for postgres feature
 tokio-postgres = { version = "^0.7", optional = true, features = ["with-serde_json-1", "with-chrono-0_4"] }
 # SurrealDB for surrealdb feature
 surrealdb = { version = "^3", optional = true }
 surrealdb-types = { version = "^3", optional = true }
+# rest-sql: always present (WASM-compatible, lightweight RSQL parser)
+rest-sql = { version = "0.2" }
+rest-sql-drivers = { version = "0.2", optional = true }
+serde_urlencoded = { version = "0.7", optional = true }
+percent-encoding = { version = "2", optional = true }
 # MCP Server
 rmcp = { version = "^0.6", optional = true, features = ["server"] }
 schemars = { version = "^1", optional = true, features = ["derive"] }

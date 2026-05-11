@@ -2,6 +2,8 @@ mod sorter;
 pub use sorter::*;
 mod paged;
 pub use paged::*;
+pub mod query;
+pub use query::{derive_filter_from_serde, Pagination, Query};
 
 mod memory;
 pub use memory::*;
