@@ -8,7 +8,8 @@ A pragmatic CQRS / Event Sourcing library for Rust with pluggable storage backen
 - Structured domain errors — `CqrsError` + `define_domain_errors!` macro
 - Pluggable storage backends: InMemory, MongoDB, PostgreSQL, SurrealDB
 - Unified `Query` trait — auto-derives filter from struct fields (RSQL under the hood)
-- HTTP Codex convention — `CqrsHttpQuery<Q>` extracts `_q`, `page`, `page_size`, `sort` from HTTP params
+- HTTP Codex convention — `CqrsHttpQuery<Q>` extracts `_q`, `skip`/`limit`, `page`/`page_size`, `sort` from HTTP params
+- RFC 9457 `application/problem+json` error responses (feature: `problem-json`)
 - Backend prelude pattern — swap the entire backend with one `use` line
 - REST routers with Axum and auto-generated OpenAPI/Swagger (feature: `rest`)
 - Audit log router for event history
@@ -31,6 +32,7 @@ cqrs-rust-lib = { version = "0.7", features = ["postgres"] }
 | `surrealdb` | SurrealDB event store + read storage                   |
 | `utoipa`    | OpenAPI schema derives only (WASM-compatible)          |
 | `rest`      | Axum routers + OpenAPI (implies `utoipa`, native only) |
+| `problem-json` | Serve errors as RFC 9457 `application/problem+json` |
 | `all`       | `rest` + `mongodb` + `postgres` + `surrealdb`          |
 
 ## Quick Start
@@ -140,16 +142,56 @@ impl From<ErrorCode> for CqrsError {
 }
 ```
 
-Response shape:
+Response shape (default):
 ```json
 {
   "domain": "account",
   "code": "ACCOUNT_INSUFFICIENT_FUNDS",
   "internalCode": 10001,
-  "status": 400,
-  "message": "Cannot withdraw 500, balance is 200"
+  "message": "Cannot withdraw 500, balance is 200",
+  "requestId": "req-123"
 }
 ```
+
+`CqrsError::from_status` never degrades a status: any code without a dedicated
+`GenericErrorCode` variant keeps its value through `GenericErrorCode::Other`
+(`GENERIC_HTTP_418`, internal code 1418). 402, 405, 406, 408, 412, 413, 415,
+422, 423, 428, 429, 501, 503 and 504 have dedicated variants whose internal code
+is `1000 + status`.
+
+### RFC 9457 problem details (`feature: problem-json`)
+
+With the `problem-json` feature the REST layer serves
+`application/problem+json` documents instead:
+
+```json
+{
+  "type": "urn:cqrs-error:account:ACCOUNT_INSUFFICIENT_FUNDS",
+  "title": "ACCOUNT_INSUFFICIENT_FUNDS",
+  "status": 400,
+  "detail": "Cannot withdraw 500, balance is 200",
+  "instance": "urn:cqrs-request:req-123",
+  "domain": "account",
+  "code": "ACCOUNT_INSUFFICIENT_FUNDS",
+  "internalCode": 10001,
+  "requestId": "req-123"
+}
+```
+
+The `type` member defaults to `urn:cqrs-error:{domain}:{code}`. Point it at your
+own documentation with a base URI, or override it per error:
+
+```rust
+use cqrs_rust_lib::problem::set_problem_type_base_uri;
+
+set_problem_type_base_uri("https://api.example.com/errors").unwrap();
+// -> "type": "https://api.example.com/errors/ACCOUNT_INSUFFICIENT_FUNDS"
+
+CqrsError::conflict("slug taken").with_type_uri("https://api.example.com/errors/slug");
+```
+
+`CqrsError::to_problem()` is available without the feature, for hand-rolled
+routes. See `docs/migration_guide/problem_json.md`.
 
 ## Backend Preludes
 
@@ -221,16 +263,29 @@ impl Query for ProductQuery {
 
 ### HTTP Codex convention (`feature: rest`)
 
-`CqrsHttpQuery<Q>` is an Axum extractor that adds `_q` (RSQL), `page`, `page_size`, `sort` on top of any typed `Q`. Use it directly with `CQRSCodexReadRouter`:
+`CqrsHttpQuery<Q>` is an Axum extractor that adds `_q` (RSQL), pagination and `sort` on top of any typed `Q`. Use it directly with `CQRSCodexReadRouter`:
 
 ```rust
 use cqrs_rust_lib::rest::{CQRSCodexReadRouter, CqrsHttpQuery};
 
-// Routes with HTTP Codex params: GET /games?_q=available==true&page=0&page_size=20&sort=-title
+// GET /games?_q=available==true&skip=20&limit=20&sort=-title
 CQRSCodexReadRouter::<Game, GameView, GameQuery>::routes(storage, "games")
 ```
 
 Filter priority: `_q` (RSQL) AND `Q::filter()` — combined. Sort priority: HTTP `sort` → `Q::sort()` → `Q::default_sort()`.
+
+Pagination accepts both vocabularies; `skip`/`limit` wins when both are present:
+
+| Params | Meaning |
+|---|---|
+| `skip`, `limit` | Offset based, maps straight to `Pagination`. `skip` alone is honoured (backend default limit applies). |
+| `page`, `page_size` (alias `pageSize`) | Page based, translated to `skip = page * page_size`. |
+
+`Paged<T>` reports both forms, so `skip`/`limit` stay exact even when `skip` is not a multiple of `limit`:
+
+```json
+{ "items": [], "total": 137, "skip": 25, "limit": 10, "page": 2, "pageSize": 10 }
+```
 
 ## Storage Backends
 
@@ -246,6 +301,39 @@ let client = Arc::new(client);
 
 client.batch_execute(&db::EventStorePersist::<Account>::schema()).await?;
 let es = db::EventStorePersist::<Account>::from_client(client.clone());
+let views = db::ReadStorage::<AccountView, AccountQuery>::new(client, "account", "account_view");
+```
+
+#### Connection pooling
+
+Both the event store and the read storage acquire connections through the same
+`PgPool` trait. The default `SharedClient` wraps a single `Arc<Client>`; plug a
+real pool (deadpool-postgres, bb8, …) by implementing the two traits — no extra
+dependency is pulled into the library:
+
+```rust
+use cqrs_rust_lib::prelude::postgres::{PgConn, PgPool};
+use cqrs_rust_lib::{cqrs_async_trait, CqrsError};
+
+#[derive(Debug, Clone)]
+struct DeadPool(deadpool_postgres::Pool);
+struct DeadConn(deadpool_postgres::Object);
+
+impl PgConn for DeadConn {
+    fn client(&self) -> &tokio_postgres::Client { &self.0 }
+}
+
+cqrs_async_trait! {
+impl PgPool for DeadPool {
+    type Connection = DeadConn;
+    async fn acquire(&self) -> Result<Self::Connection, CqrsError> {
+        self.0.get().await.map(DeadConn).map_err(CqrsError::database_error)
+    }
+}
+}
+
+let es = db::EventStorePersist::<Account>::with_pool(pool.clone());
+let views = db::ReadStorage::<AccountView, AccountQuery>::with_pool(pool, "account", "account_view");
 ```
 
 ### MongoDB

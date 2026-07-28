@@ -1,9 +1,24 @@
+use crate::rest::ERROR_MEDIA_TYPE;
+use crate::CqrsError;
+use http::StatusCode;
 use serde_json::Value;
 use utoipa::openapi::path::{OperationBuilder, Parameter, ParameterBuilder, ParameterIn};
 use utoipa::openapi::request_body::RequestBody;
 use utoipa::openapi::{
-    Content, HttpMethod, PathItem, Paths, PathsBuilder, RefOr, Required, ResponseBuilder, Schema,
+    Content, HttpMethod, PathItem, Paths, PathsBuilder, Ref, RefOr, Required, ResponseBuilder,
+    Schema,
 };
+use utoipa::PartialSchema;
+
+/// Component name of the error body in the OpenAPI document. The shape behind
+/// it follows the `problem-json` feature (RFC 9457 document or legacy body).
+pub const ERROR_SCHEMA_NAME: &str = "CqrsError";
+
+/// `(name, schema)` pair to push into a route's schema list so the error body
+/// ends up in `components/schemas`.
+pub fn error_schema() -> (String, RefOr<Schema>) {
+    (ERROR_SCHEMA_NAME.to_string(), CqrsError::schema())
+}
 
 pub fn method_to_string(method: &HttpMethod) -> &'static str {
     match method {
@@ -18,6 +33,9 @@ pub fn method_to_string(method: &HttpMethod) -> &'static str {
     }
 }
 
+// One positional argument per OpenAPI facet; grouping them into a struct would
+// only move the same list behind a name.
+#[allow(clippy::too_many_arguments)]
 pub fn generate_route(
     type_: &str,
     method: HttpMethod,
@@ -26,6 +44,7 @@ pub fn generate_route(
     path_parameters: Vec<(String, RefOr<Schema>)>,
     query_parameters: Vec<Parameter>,
     body: Option<RefOr<Schema>>,
+    error_statuses: &[StatusCode],
 ) -> Paths {
     let code = match &method {
         HttpMethod::Post => "201",
@@ -48,6 +67,18 @@ pub fn generate_route(
             Some(query_parameters)
         })
         .tag(type_);
+
+    for status in error_statuses {
+        operation = operation.response(
+            status.as_u16().to_string(),
+            ResponseBuilder::new()
+                .description(status.canonical_reason().unwrap_or("Error"))
+                .content(
+                    ERROR_MEDIA_TYPE,
+                    Content::new(Some(RefOr::Ref(Ref::from_schema_name(ERROR_SCHEMA_NAME)))),
+                ),
+        );
+    }
 
     for (name, schema) in path_parameters {
         operation = operation.parameter(
@@ -172,4 +203,59 @@ pub fn sanitize_schema_name(name: &str) -> String {
         prev_char = Some(c);
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn declares_error_responses_with_the_error_media_type() {
+        let paths = generate_route(
+            "game",
+            HttpMethod::Get,
+            "/games/{game_id}",
+            RefOr::Ref(Ref::from_schema_name("Game")),
+            vec![("game_id".to_string(), String::schema())],
+            vec![],
+            None,
+            &[StatusCode::NOT_FOUND, StatusCode::INTERNAL_SERVER_ERROR],
+        );
+
+        let json = serde_json::to_value(&paths).unwrap();
+        let responses = &json["/games/{game_id}"]["get"]["responses"];
+
+        assert!(responses["200"]["content"]["application/json"].is_object());
+
+        for status in ["404", "500"] {
+            let content = &responses[status]["content"][ERROR_MEDIA_TYPE];
+            assert!(
+                content.is_object(),
+                "missing {ERROR_MEDIA_TYPE} content for {status}: {responses}"
+            );
+            assert_eq!(
+                content["schema"]["$ref"],
+                format!("#/components/schemas/{ERROR_SCHEMA_NAME}")
+            );
+        }
+        assert_eq!(responses["404"]["description"], "Not Found");
+    }
+
+    #[test]
+    fn without_error_statuses_only_the_success_response_is_declared() {
+        let paths = generate_route(
+            "game",
+            HttpMethod::Get,
+            "/games",
+            RefOr::Ref(Ref::from_schema_name("Game")),
+            vec![],
+            vec![],
+            None,
+            &[],
+        );
+        let json = serde_json::to_value(&paths).unwrap();
+        let responses = json["/games"]["get"]["responses"].as_object().unwrap();
+        assert_eq!(responses.len(), 1);
+        assert!(responses.contains_key("200"));
+    }
 }

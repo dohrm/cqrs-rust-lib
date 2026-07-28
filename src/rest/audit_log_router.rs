@@ -84,10 +84,13 @@ where
     ) -> OpenApiRouter<CQRSAuditLogRouter<A>> {
         let path = format!("/{{{}}}/audit", Self::path_aggregate_id_field());
         let response_schema_name = format!("Paged_{}_AuditLog", A::TYPE);
-        let schemas = vec![(
-            response_schema_name.to_string(),
-            Paged::<AuditLogEntry>::schema(),
-        )];
+        let schemas = vec![
+            (
+                response_schema_name.to_string(),
+                Paged::<AuditLogEntry>::schema(),
+            ),
+            helpers::error_schema(),
+        ];
 
         let paths = helpers::generate_route(
             tag,
@@ -97,6 +100,11 @@ where
             vec![(Self::path_aggregate_id_field(), String::schema())],
             AuditLogQuery::into_params(|| Some(ParameterIn::Query)),
             None,
+            &[
+                StatusCode::BAD_REQUEST,
+                StatusCode::NOT_FOUND,
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ],
         );
 
         let handler = get(
@@ -133,12 +141,12 @@ where
             Ok((events, total)) => {
                 let items: Vec<AuditLogEntry> =
                     events.into_iter().map(AuditLogEntry::from).collect();
-                let response = Paged {
+                let response = Paged::new(
                     items,
                     total,
-                    page: query.page as i64,
-                    page_size: query.page_size as i64,
-                };
+                    (query.page * query.page_size) as i64,
+                    query.page_size as i64,
+                );
                 (StatusCode::OK, Json(response)).into_response()
             }
             Err(err) => err.into_response(),

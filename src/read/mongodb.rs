@@ -147,12 +147,7 @@ where
         .map_err(map_mongo_error)?;
 
         let items = cursor.try_collect().await.map_err(map_mongo_error)?;
-        Ok(Paged {
-            items,
-            total: total as i64,
-            page_size: limit_v,
-            page: if limit_v > 0 { ((skip_v as i64) / limit_v).abs() } else { 0 },
-        })
+        Ok(Paged::new(items, total as i64, skip_v as i64, limit_v))
     }
 
     async fn find_by_id(
@@ -244,12 +239,7 @@ where
         context: CqrsContext,
     ) -> Result<Paged<A>, CqrsError> {
         let result = self.inner.filter(parent_id, query, context).await?;
-        Ok(Paged {
-            items: result.items.iter().map(|s| s.state.clone()).collect(),
-            total: result.total,
-            page: result.page,
-            page_size: result.page_size,
-        })
+        Ok(result.map(|s| s.state))
     }
 
     async fn find_by_id(
