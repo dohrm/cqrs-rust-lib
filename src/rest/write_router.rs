@@ -65,6 +65,7 @@ where
             let mut schemas = base_schema.clone();
             schemas.push((result_name.clone(), CreationResult::schema()));
             schemas.push((schema_name.clone(), RefOr::T(schema.clone())));
+            schemas.push(helpers::error_schema());
             A::CreateCommand::schemas(&mut schemas);
             A::schemas(&mut schemas);
             CreationResult::schemas(&mut schemas);
@@ -77,6 +78,12 @@ where
                 vec![],
                 vec![],
                 Some(RefOr::Ref(Ref::from_schema_name(&schema_name))),
+                &[
+                    StatusCode::BAD_REQUEST,
+                    StatusCode::CONFLICT,
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                ],
             );
 
             let current_discriminator = discriminator.clone();
@@ -105,6 +112,7 @@ where
             let mut schemas = base_schema.clone();
             schemas.push((result_name.clone(), UpdateResult::schema()));
             schemas.push((schema_name.clone(), RefOr::T(schema.clone())));
+            schemas.push(helpers::error_schema());
             A::UpdateCommand::schemas(&mut schemas);
             UpdateResult::schemas(&mut schemas);
 
@@ -122,6 +130,13 @@ where
                 vec![(id_path, String::schema())],
                 vec![],
                 Some(RefOr::Ref(Ref::from_schema_name(&schema_name))),
+                &[
+                    StatusCode::BAD_REQUEST,
+                    StatusCode::NOT_FOUND,
+                    StatusCode::CONFLICT,
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                ],
             );
 
             let current_discriminator = discriminator.clone();
@@ -156,6 +171,7 @@ where
         context: CqrsContext,
     ) -> impl IntoResponse {
         helpers::add_discriminator(&mut command, discriminator);
+        let request_id = context.request_id();
         match serde_json::from_value::<A::CreateCommand>(command) {
             Ok(cmd) => match router
                 .engine
@@ -165,9 +181,13 @@ where
                 Ok(result) => {
                     (StatusCode::CREATED, Json(CreationResult { id: result })).into_response()
                 }
-                Err(err) => err.into_response(),
+                Err(err) => err.with_request_id_if_absent(request_id).into_response(),
             },
-            Err(err) => CqrsError::serialization_error(err).into_response(),
+            // A command body that does not match the schema is a client error:
+            // report 422, not the 500 that `serialization_error` would yield.
+            Err(err) => CqrsError::unprocessable(err.to_string())
+                .with_request_id_if_absent(request_id)
+                .into_response(),
         }
     }
 
@@ -179,6 +199,7 @@ where
         context: CqrsContext,
     ) -> impl IntoResponse {
         helpers::add_discriminator(&mut command, discriminator);
+        let request_id = context.request_id();
         match serde_json::from_value::<A::UpdateCommand>(command) {
             Ok(cmd) => match router
                 .engine
@@ -186,9 +207,13 @@ where
                 .await
             {
                 Ok(_) => (StatusCode::OK, Json(UpdateResult)).into_response(),
-                Err(err) => err.into_response(),
+                Err(err) => err.with_request_id_if_absent(request_id).into_response(),
             },
-            Err(err) => CqrsError::serialization_error(err).into_response(),
+            // A command body that does not match the schema is a client error:
+            // report 422, not the 500 that `serialization_error` would yield.
+            Err(err) => CqrsError::unprocessable(err.to_string())
+                .with_request_id_if_absent(request_id)
+                .into_response(),
         }
     }
 }

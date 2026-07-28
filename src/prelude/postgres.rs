@@ -1,5 +1,6 @@
-pub use crate::es::postgres::{PgConn, PgPool, PgSession, PostgresPersist, SharedClient};
+pub use crate::es::postgres::{PgSession, PostgresPersist};
 pub use crate::es::postgres::PostgresPersist as EventStorePersist;
+pub use crate::pg::{PgConn, PgPool, SharedClient};
 pub use crate::read::postgres::{PostgresFromSnapshotStorage, PostgresStorage};
 pub use crate::read::postgres::PostgresFromSnapshotStorage as FromSnapshotStorage;
 pub use crate::read::postgres::PostgresStorage as ReadStorage;

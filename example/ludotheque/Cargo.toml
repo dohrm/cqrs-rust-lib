@@ -8,20 +8,22 @@ publish = false
 serde = { version = "^1.0.0", features = ["serde_derive"] }
 chrono = { version = "^0.4", features = ["serde"] }
 http = "^1.3.0"
-axum = "0.8.4"
-utoipa = { version = "5.4.0", features = ["chrono"] }
+axum = "0.8.9"
+utoipa = { version = "5.5", features = ["chrono"] }
 utoipa-axum = "^0.2.0"
 utoipa-swagger-ui = { version = "9.0.2", features = ["axum"] }
-tower-http = { version = "0.6.6", features = ["add-extension", "trace", "cors", "request-id"] }
+tower-http = { version = "0.7", features = ["add-extension", "trace", "cors", "request-id"] }
 tracing = { version = "0.1.41" }
 tracing-subscriber = { version = ">=0.3.20", features = ["env-filter", "chrono"] }
 # runtime
 tokio = { version = "^1.45.0", features = ["rt-multi-thread", "macros"] }
-surrealdb = { version = "^3", features = ["kv-mem"] }
+surrealdb = { version = "^3.2", features = ["kv-mem"] }
 
 thiserror = "2"
 # project
-cqrs-rust-lib = { path = "../..", features = ["rest", "surrealdb"] }
+# problem-json: serve errors as RFC 9457 application/problem+json.
+# The other examples keep the legacy body, so both paths stay covered.
+cqrs-rust-lib = { path = "../..", features = ["rest", "surrealdb", "problem-json"] }
 
 [package.metadata.cargo-machete]
 ignored = ["thiserror"]

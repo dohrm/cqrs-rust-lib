@@ -1,7 +1,7 @@
 use crate::read::storage::DynStorage;
 use crate::read::Paged;
 use crate::rest::helpers;
-use crate::{Aggregate, CqrsContext, View};
+use crate::{Aggregate, CqrsContext, CqrsError, View};
 use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
 use axum::routing::get;
@@ -69,7 +69,10 @@ where
     ) -> OpenApiRouter<CQRSReadRouter<A, V, Q>> {
         let path = Self::base_path();
         let response_schema_name = format!("{}_{}", Paged::<V>::name(), V::name());
-        let schemas = vec![(response_schema_name.to_string(), Paged::<V>::schema())];
+        let schemas = vec![
+            (response_schema_name.to_string(), Paged::<V>::schema()),
+            helpers::error_schema(),
+        ];
 
         let paths = helpers::generate_route(
             tag,
@@ -79,6 +82,7 @@ where
             Self::base_path_parameters(),
             Q::into_params(|| Some(ParameterIn::Query)),
             None,
+            &[StatusCode::BAD_REQUEST, StatusCode::INTERNAL_SERVER_ERROR],
         );
 
         let find_many_handler = if V::IS_CHILD_OF_AGGREGATE {
@@ -113,7 +117,10 @@ where
     ) -> OpenApiRouter<CQRSReadRouter<A, V, Q>> {
         let path = Self::base_path();
         let response_schema_name = V::name();
-        let schemas = vec![(response_schema_name.to_string(), V::schema())];
+        let schemas = vec![
+            (response_schema_name.to_string(), V::schema()),
+            helpers::error_schema(),
+        ];
 
         let mut path_parameters = Self::base_path_parameters();
         path_parameters.push((Self::path_id_field(), String::schema()));
@@ -126,6 +133,7 @@ where
             path_parameters,
             vec![],
             None,
+            &[StatusCode::NOT_FOUND, StatusCode::INTERNAL_SERVER_ERROR],
         );
 
         let find_one_handler = if V::IS_CHILD_OF_AGGREGATE {
@@ -171,9 +179,10 @@ where
         query: Q,
         context: CqrsContext,
     ) -> impl IntoResponse {
+        let request_id = context.request_id();
         match router.storage.filter(parent_id, query, context).await {
             Ok(result) => (StatusCode::OK, Json(result)).into_response(),
-            Err(err) => err.into_response(),
+            Err(err) => err.with_request_id_if_absent(request_id).into_response(),
         }
     }
 
@@ -183,10 +192,14 @@ where
         id: String,
         context: CqrsContext,
     ) -> impl IntoResponse {
+        let request_id = context.request_id();
         match router.storage.find_by_id(parent_id, &id, context).await {
             Ok(Some(x)) => (StatusCode::OK, Json(x)).into_response(),
-            Ok(None) => (StatusCode::NOT_FOUND, Json(json!({ "id": id}))).into_response(),
-            Err(err) => err.into_response(),
+            Ok(None) => CqrsError::not_found(format!("{} '{}' not found", V::TYPE, id))
+                .with_details(json!({ "id": id }))
+                .with_request_id_if_absent(request_id)
+                .into_response(),
+            Err(err) => err.with_request_id_if_absent(request_id).into_response(),
         }
     }
 }
