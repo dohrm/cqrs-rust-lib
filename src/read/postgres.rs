@@ -1,3 +1,4 @@
+use crate::pg::{PgConn, PgPool, SharedClient};
 use crate::read::query::Query;
 use crate::read::sorter::{SortDirection, Sorter};
 use crate::read::storage::{HasId, Storage, StorageError};
@@ -37,31 +38,58 @@ fn sorters_to_order_by(sort: Option<Vec<Sorter>>, mapper: &impl FieldMapper) -> 
     format!(" ORDER BY {}", parts.join(", "))
 }
 
+/// Read-side storage backed by a JSONB `data` column.
+///
+/// Connections are acquired through [`PgPool`], the same abstraction as
+/// [`crate::es::postgres::PostgresPersist`]. The default `P = SharedClient`
+/// keeps the single-`Arc<Client>` behaviour; pass a real pool via
+/// [`Self::with_pool`].
 #[derive(Debug, Clone)]
-pub struct PostgresStorage<V, Q, M = IdentityMapper> {
+pub struct PostgresStorage<V, Q, M = IdentityMapper, P = SharedClient> {
     _phantom: PhantomData<(V, Q)>,
-    client: Arc<Client>,
+    pool: P,
     type_name: String,
     table_name: String,
     mapper: M,
 }
 
-impl<V, Q> PostgresStorage<V, Q, IdentityMapper> {
+impl<V, Q> PostgresStorage<V, Q, IdentityMapper, SharedClient> {
     #[must_use]
     pub fn new(client: Arc<Client>, type_name: &str, table_name: &str) -> Self {
         Self::with_mapper(client, type_name, table_name, IdentityMapper)
     }
 }
 
-impl<V, Q, M> PostgresStorage<V, Q, M>
+impl<V, Q, M> PostgresStorage<V, Q, M, SharedClient>
 where
     M: FieldMapper + Debug + Clone + Send + Sync,
 {
     #[must_use]
     pub fn with_mapper(client: Arc<Client>, type_name: &str, table_name: &str, mapper: M) -> Self {
+        Self::with_pool_and_mapper(SharedClient(client), type_name, table_name, mapper)
+    }
+}
+
+impl<V, Q, P> PostgresStorage<V, Q, IdentityMapper, P>
+where
+    P: PgPool,
+{
+    #[must_use]
+    pub fn with_pool(pool: P, type_name: &str, table_name: &str) -> Self {
+        Self::with_pool_and_mapper(pool, type_name, table_name, IdentityMapper)
+    }
+}
+
+impl<V, Q, M, P> PostgresStorage<V, Q, M, P>
+where
+    M: FieldMapper + Debug + Clone + Send + Sync,
+    P: PgPool,
+{
+    #[must_use]
+    pub fn with_pool_and_mapper(pool: P, type_name: &str, table_name: &str, mapper: M) -> Self {
         Self {
             _phantom: PhantomData,
-            client,
+            pool,
             type_name: type_name.to_string(),
             table_name: table_name.to_string(),
             mapper,
@@ -69,11 +97,12 @@ where
     }
 }
 
-impl<V, Q, M> PostgresStorage<V, Q, M>
+impl<V, Q, M, P> PostgresStorage<V, Q, M, P>
 where
     V: HasId,
     Q: Query,
     M: FieldMapper + Debug + Clone + Send + Sync,
+    P: PgPool,
 {
     fn build_filter(
         &self,
@@ -110,11 +139,12 @@ where
 }
 
 cqrs_async_trait! {
-impl<V, Q, M> Storage<V, Q> for PostgresStorage<V, Q, M>
+impl<V, Q, M, P> Storage<V, Q> for PostgresStorage<V, Q, M, P>
 where
     V: Debug + Clone + Default + Serialize + DeserializeOwned + Send + Sync + HasId,
-    Q: Clone + Debug + DeserializeOwned + Send + Sync + Query,
+    Q: Clone + Debug + Send + Sync + Query,
     M: FieldMapper + Debug + Clone + Send + Sync,
+    P: PgPool,
 {
     fn type_name(&self) -> &str {
         &self.type_name
@@ -138,6 +168,8 @@ where
         let offset_v = pagination.skip.unwrap_or(0);
         let order_by = sorters_to_order_by(query.sort(), &self.mapper);
 
+        let conn = self.pool.acquire().await?;
+
         let count_sql = format!(
             "SELECT COUNT(*)::BIGINT AS total FROM {}{}",
             self.table_name, where_full
@@ -146,8 +178,8 @@ where
             .iter()
             .map(|b| b.as_ref() as &(dyn ToSql + Sync))
             .collect();
-        let row = self
-            .client
+        let row = conn
+            .client()
             .query_one(&count_sql, &count_params)
             .await
             .map_err(map_pg_error)?;
@@ -169,8 +201,8 @@ where
             .iter()
             .map(|b| b.as_ref() as &(dyn ToSql + Sync))
             .collect();
-        let rows = self
-            .client
+        let rows = conn
+            .client()
             .query(&select_sql, &select_params_ref)
             .await
             .map_err(map_pg_error)?;
@@ -180,12 +212,7 @@ where
             let v: V = serde_json::from_value(val).map_err(CqrsError::serialization_error)?;
             items.push(v);
         }
-        Ok(Paged {
-            items,
-            total,
-            page_size: limit_v,
-            page: if limit_v > 0 { (offset_v / limit_v).abs() } else { 0 },
-        })
+        Ok(Paged::new(items, total, offset_v, limit_v))
     }
 
     async fn find_by_id(
@@ -205,8 +232,9 @@ where
             ));
         }
         let sql = format!("SELECT data FROM {} WHERE {}", self.table_name, where_sql);
-        let row = self
-            .client
+        let conn = self.pool.acquire().await?;
+        let row = conn
+            .client()
             .query_opt(&sql, &params)
             .await
             .map_err(map_pg_error)?;
@@ -237,7 +265,8 @@ where
              ON CONFLICT (id) DO UPDATE SET parent_id = EXCLUDED.parent_id, data = EXCLUDED.data",
             self.table_name
         );
-        self.client
+        let conn = self.pool.acquire().await?;
+        conn.client()
             .execute(&sql, &[&id, &parent_id, &data_obj])
             .await
             .map_err(map_pg_error)?;
@@ -247,23 +276,25 @@ where
 }
 
 #[derive(Debug, Clone)]
-pub struct PostgresFromSnapshotStorage<A, Q, M = IdentityMapper>
+pub struct PostgresFromSnapshotStorage<A, Q, M = IdentityMapper, P = SharedClient>
 where
     A: Aggregate,
-    Q: Debug + Clone + DeserializeOwned + Send + Sync + Query,
+    Q: Debug + Clone + Send + Sync + Query,
     M: FieldMapper + Debug + Clone + Send + Sync,
+    P: PgPool,
 {
     _phantom: PhantomData<A>,
-    inner: Arc<PostgresStorage<Snapshot<A>, Q, M>>,
+    inner: Arc<PostgresStorage<Snapshot<A>, Q, M, P>>,
 }
 
-impl<A, Q> PostgresFromSnapshotStorage<A, Q, IdentityMapper>
+impl<A, Q, P> PostgresFromSnapshotStorage<A, Q, IdentityMapper, P>
 where
     A: Aggregate,
-    Q: Debug + Clone + DeserializeOwned + Send + Sync + Query,
+    Q: Debug + Clone + Send + Sync + Query,
+    P: PgPool,
 {
     #[must_use]
-    pub fn new(inner: Arc<PostgresStorage<Snapshot<A>, Q, IdentityMapper>>) -> Self {
+    pub fn new(inner: Arc<PostgresStorage<Snapshot<A>, Q, IdentityMapper, P>>) -> Self {
         Self {
             _phantom: PhantomData,
             inner,
@@ -271,14 +302,15 @@ where
     }
 }
 
-impl<A, Q, M> PostgresFromSnapshotStorage<A, Q, M>
+impl<A, Q, M, P> PostgresFromSnapshotStorage<A, Q, M, P>
 where
     A: Aggregate,
-    Q: Debug + Clone + DeserializeOwned + Send + Sync + Query,
+    Q: Debug + Clone + Send + Sync + Query,
     M: FieldMapper + Debug + Clone + Send + Sync,
+    P: PgPool,
 {
     #[must_use]
-    pub fn with_mapper(inner: Arc<PostgresStorage<Snapshot<A>, Q, M>>) -> Self {
+    pub fn with_mapper(inner: Arc<PostgresStorage<Snapshot<A>, Q, M, P>>) -> Self {
         Self {
             _phantom: PhantomData,
             inner,
@@ -287,11 +319,12 @@ where
 }
 
 cqrs_async_trait! {
-impl<A, Q, M> Storage<A, Q> for PostgresFromSnapshotStorage<A, Q, M>
+impl<A, Q, M, P> Storage<A, Q> for PostgresFromSnapshotStorage<A, Q, M, P>
 where
     A: Aggregate,
-    Q: Clone + Debug + DeserializeOwned + Send + Sync + Query,
+    Q: Clone + Debug + Send + Sync + Query,
     M: FieldMapper + Debug + Clone + Send + Sync,
+    P: PgPool,
 {
     fn type_name(&self) -> &str {
         A::TYPE
@@ -304,12 +337,7 @@ where
         context: CqrsContext,
     ) -> Result<Paged<A>, CqrsError> {
         let result = self.inner.filter(parent_id, query, context).await?;
-        Ok(Paged {
-            items: result.items.iter().map(|s| s.state.clone()).collect(),
-            total: result.total,
-            page: result.page,
-            page_size: result.page_size,
-        })
+        Ok(result.map(|s| s.state))
     }
 
     async fn find_by_id(
@@ -331,4 +359,94 @@ where
         )))
     }
 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde::Deserialize;
+
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    struct Article {
+        id: String,
+    }
+
+    impl HasId for Article {
+        fn field_id() -> &'static str {
+            "id"
+        }
+        fn id(&self) -> &str {
+            &self.id
+        }
+        fn parent_field_id() -> Option<&'static str> {
+            None
+        }
+        fn parent_id(&self) -> Option<&str> {
+            None
+        }
+    }
+
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    struct ArticleQuery {}
+
+    impl Query for ArticleQuery {}
+
+    /// A pool that never yields a connection — enough to prove a custom
+    /// `PgPool` is plumbed through every `Storage` method without a live
+    /// database.
+    #[derive(Debug, Clone)]
+    struct FailingPool;
+
+    cqrs_async_trait! {
+    impl PgPool for FailingPool {
+        type Connection = SharedClient;
+        async fn acquire(&self) -> Result<Self::Connection, CqrsError> {
+            Err(CqrsError::database_error("pool exhausted"))
+        }
+    }
+    }
+
+    fn storage() -> PostgresStorage<Article, ArticleQuery, IdentityMapper, FailingPool> {
+        PostgresStorage::with_pool(FailingPool, "article", "articles")
+    }
+
+    #[tokio::test]
+    async fn custom_pool_is_used_by_filter() {
+        let err = storage()
+            .filter(None, ArticleQuery::default(), CqrsContext::default())
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, "INFRASTRUCTURE_DATABASE_ERROR");
+        assert!(err.message.contains("pool exhausted"));
+    }
+
+    #[tokio::test]
+    async fn custom_pool_is_used_by_find_by_id() {
+        let err = storage()
+            .find_by_id(None, "abc", CqrsContext::default())
+            .await
+            .unwrap_err();
+        assert!(err.message.contains("pool exhausted"));
+    }
+
+    #[tokio::test]
+    async fn custom_pool_is_used_by_save() {
+        let err = storage()
+            .save(Article::default(), CqrsContext::default())
+            .await
+            .unwrap_err();
+        assert!(err.message.contains("pool exhausted"));
+    }
+
+    #[test]
+    fn default_type_params_keep_the_arc_client_constructors() {
+        // Compile-time check: `new`/`with_mapper` still resolve to
+        // `P = SharedClient` without naming the pool type parameter.
+        fn _assert(client: Arc<Client>) {
+            let _: PostgresStorage<Article, ArticleQuery> =
+                PostgresStorage::new(client.clone(), "article", "articles");
+            let _: PostgresStorage<Article, ArticleQuery, IdentityMapper> =
+                PostgresStorage::with_mapper(client, "article", "articles", IdentityMapper);
+        }
+    }
 }

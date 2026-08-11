@@ -14,6 +14,8 @@ all = ["rest", "mongodb", "postgres", "surrealdb"]
 surrealdb = ["dep:surrealdb", "dep:surrealdb-types", "dep:rest-sql-drivers", "rest-sql-drivers/surrealdb"]
 utoipa = ["dep:utoipa"]
 rest = ["utoipa", "dep:axum", "dep:utoipa-axum", "dep:serde_urlencoded", "dep:percent-encoding"]
+# Serve errors as RFC 9457 `application/problem+json` instead of the legacy body.
+problem-json = []
 mongodb = ["dep:mongodb", "dep:bson", "dep:rest-sql-drivers", "rest-sql-drivers/mongodb"]
 postgres = ["dep:tokio-postgres", "dep:rest-sql-drivers", "rest-sql-drivers/tokio-postgres"]
 mcp = ["dep:rmcp", "dep:schemars"]
@@ -41,8 +43,8 @@ mongodb = { version = "^3.8", default-features = false, features = ["rustls-tls"
 # Postgres client for postgres feature
 tokio-postgres = { version = "^0.7", optional = true, features = ["with-serde_json-1", "with-chrono-0_4"] }
 # SurrealDB for surrealdb feature
-surrealdb = { version = "^3", optional = true }
-surrealdb-types = { version = "^3", optional = true }
+surrealdb = { version = "^3.2", optional = true }
+surrealdb-types = { version = "^3.2", optional = true }
 # rest-sql: always present (WASM-compatible, lightweight RSQL parser)
 rest-sql = { version = "0.4" }
 rest-sql-drivers = { version = "0.4", optional = true }
@@ -55,7 +57,7 @@ schemars = { version = "^1", optional = true, features = ["derive"] }
 [dev-dependencies]
 tokio = { version = "^1", features = ["rt-multi-thread", "macros"] }
 # Enable in-memory engine for SurrealDB tests
-surrealdb = { version = "^3", features = ["kv-mem"] }
+surrealdb = { version = "^3.2", features = ["kv-mem"] }
 
 [package.metadata.cargo-machete]
 ignored = ["getrandom", "rmcp", "schemars"]

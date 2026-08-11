@@ -21,7 +21,9 @@ surrealdb = { version = "^3", features = ["kv-mem"] }
 
 thiserror = "2"
 # project
-cqrs-rust-lib = { path = "../..", features = ["rest", "surrealdb"] }
+# problem-json: serve errors as RFC 9457 application/problem+json.
+# The other examples keep the legacy body, so both paths stay covered.
+cqrs-rust-lib = { path = "../..", features = ["rest", "surrealdb", "problem-json"] }
 
 [package.metadata.cargo-machete]
 ignored = ["thiserror"]

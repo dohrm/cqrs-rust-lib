@@ -107,6 +107,11 @@ pub struct CqrsErrorData {
     /// Request ID for tracing (optional)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+
+    /// Overrides the `type` member of the RFC 9457 problem document (optional).
+    /// See [`crate::problem::ProblemDetails`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub type_uri: Option<String>,
 }
 
 /// Unified error for API responses.
@@ -143,10 +148,20 @@ impl std::ops::DerefMut for CqrsError {
     }
 }
 
-#[cfg(feature = "utoipa")]
+// The advertised schema follows the wire format actually produced by the REST
+// layer: an RFC 9457 problem document under `problem-json`, the legacy body
+// otherwise.
+#[cfg(all(feature = "utoipa", not(feature = "problem-json")))]
 impl utoipa::PartialSchema for CqrsError {
     fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
         CqrsErrorData::schema()
+    }
+}
+
+#[cfg(all(feature = "utoipa", feature = "problem-json"))]
+impl utoipa::PartialSchema for CqrsError {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        crate::problem::ProblemDetails::schema()
     }
 }
 
@@ -168,6 +183,7 @@ impl CqrsError {
             message: message.into(),
             details: None,
             request_id: None,
+            type_uri: None,
         }))
     }
 
@@ -183,9 +199,36 @@ impl CqrsError {
         self
     }
 
+    /// Add a request ID unless the error already carries one (empty ids are
+    /// ignored). Used by the REST layer to stamp errors with the
+    /// [`crate::CqrsContext`] request id on their way out.
+    pub fn with_request_id_if_absent(mut self, request_id: impl Into<String>) -> Self {
+        let request_id = request_id.into();
+        if self.request_id.is_none() && !request_id.is_empty() {
+            self.request_id = Some(request_id);
+        }
+        self
+    }
+
+    /// Override the `type` member of the RFC 9457 problem document for this
+    /// error, bypassing both the configured base URI and the default
+    /// `urn:cqrs-error:{domain}:{code}`.
+    pub fn with_type_uri(mut self, type_uri: impl Into<String>) -> Self {
+        self.type_uri = Some(type_uri.into());
+        self
+    }
+
     /// Get the HTTP status code for this error.
     pub fn http_status(&self) -> StatusCode {
         StatusCode::from_u16(self.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+    }
+
+    /// Render this error as an RFC 9457 problem document.
+    ///
+    /// Available regardless of the `problem-json` feature, which only controls
+    /// what the built-in Axum routers emit.
+    pub fn to_problem(&self) -> crate::problem::ProblemDetails {
+        crate::problem::ProblemDetails::from(self)
     }
 
     // ============================================
@@ -220,6 +263,54 @@ impl CqrsError {
     /// Create a generic forbidden error.
     pub fn forbidden(message: impl Into<String>) -> Self {
         GenericErrorCode::Forbidden.error(message)
+    }
+
+    /// Create a generic gone error (410).
+    pub fn gone(message: impl Into<String>) -> Self {
+        GenericErrorCode::Gone.error(message)
+    }
+
+    /// Create a generic unprocessable entity error (422).
+    ///
+    /// Use this instead of [`Self::validation`] when the request is
+    /// syntactically valid but semantically rejected.
+    pub fn unprocessable(message: impl Into<String>) -> Self {
+        GenericErrorCode::UnprocessableEntity.error(message)
+    }
+
+    /// Create a generic precondition failed error (412).
+    pub fn precondition_failed(message: impl Into<String>) -> Self {
+        GenericErrorCode::PreconditionFailed.error(message)
+    }
+
+    /// Create a generic precondition required error (428).
+    pub fn precondition_required(message: impl Into<String>) -> Self {
+        GenericErrorCode::PreconditionRequired.error(message)
+    }
+
+    /// Create a generic unsupported media type error (415).
+    pub fn unsupported_media_type(message: impl Into<String>) -> Self {
+        GenericErrorCode::UnsupportedMediaType.error(message)
+    }
+
+    /// Create a generic payload too large error (413).
+    pub fn payload_too_large(message: impl Into<String>) -> Self {
+        GenericErrorCode::PayloadTooLarge.error(message)
+    }
+
+    /// Create a generic too many requests error (429).
+    pub fn too_many_requests(message: impl Into<String>) -> Self {
+        GenericErrorCode::TooManyRequests.error(message)
+    }
+
+    /// Create a generic not implemented error (501).
+    pub fn not_implemented(message: impl Into<String>) -> Self {
+        GenericErrorCode::NotImplemented.error(message)
+    }
+
+    /// Create a generic service unavailable error (503).
+    pub fn service_unavailable(message: impl Into<String>) -> Self {
+        GenericErrorCode::ServiceUnavailable.error(message)
     }
 
     // ============================================
@@ -257,6 +348,10 @@ impl CqrsError {
     }
 
     /// Create an error from an HTTP status code and message.
+    ///
+    /// The status is always preserved: statuses without a dedicated
+    /// [`GenericErrorCode`] variant fall back to [`GenericErrorCode::Other`]
+    /// (code `GENERIC_HTTP_<status>`) rather than being degraded to 500.
     pub fn from_status(status: StatusCode, message: impl Into<String>) -> Self {
         GenericErrorCode::from(status).error(message)
     }
@@ -376,7 +471,18 @@ impl CqrsErrorCode for InfrastructureErrorCode {
 /// Generic error codes for common scenarios.
 ///
 /// Use these when a domain-specific error code is not available.
+///
+/// # Error indexes
+///
+/// The six historical variants keep their original indexes (0-6) so existing
+/// `internalCode` values stay stable. Every variant added later uses its HTTP
+/// status code as index, which makes the internal code self-describing
+/// (`UnprocessableEntity` -> 1422, `TooManyRequests` -> 1429).
+///
+/// `Other` is the catch-all for any status without a dedicated variant: it
+/// carries the status verbatim so nothing is ever silently degraded to 500.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum GenericErrorCode {
     #[error("INTERNAL_ERROR")]
     InternalError,
@@ -392,6 +498,38 @@ pub enum GenericErrorCode {
     Forbidden,
     #[error("GONE")]
     Gone,
+    #[error("PAYMENT_REQUIRED")]
+    PaymentRequired,
+    #[error("METHOD_NOT_ALLOWED")]
+    MethodNotAllowed,
+    #[error("NOT_ACCEPTABLE")]
+    NotAcceptable,
+    #[error("REQUEST_TIMEOUT")]
+    RequestTimeout,
+    #[error("PRECONDITION_FAILED")]
+    PreconditionFailed,
+    #[error("PAYLOAD_TOO_LARGE")]
+    PayloadTooLarge,
+    #[error("UNSUPPORTED_MEDIA_TYPE")]
+    UnsupportedMediaType,
+    #[error("UNPROCESSABLE_ENTITY")]
+    UnprocessableEntity,
+    #[error("LOCKED")]
+    Locked,
+    #[error("PRECONDITION_REQUIRED")]
+    PreconditionRequired,
+    #[error("TOO_MANY_REQUESTS")]
+    TooManyRequests,
+    #[error("NOT_IMPLEMENTED")]
+    NotImplemented,
+    #[error("SERVICE_UNAVAILABLE")]
+    ServiceUnavailable,
+    #[error("GATEWAY_TIMEOUT")]
+    GatewayTimeout,
+    /// Any other HTTP status, kept verbatim (e.g. `Other(418)` ->
+    /// `GENERIC_HTTP_418`, internal code 1418, status 418).
+    #[error("HTTP_{0}")]
+    Other(u16),
 }
 
 impl CqrsErrorCode for GenericErrorCode {
@@ -411,6 +549,22 @@ impl CqrsErrorCode for GenericErrorCode {
             Self::Unauthorized => 4,
             Self::Forbidden => 5,
             Self::Gone => 6,
+            // Variants added later: index == HTTP status code.
+            Self::PaymentRequired => 402,
+            Self::MethodNotAllowed => 405,
+            Self::NotAcceptable => 406,
+            Self::RequestTimeout => 408,
+            Self::PreconditionFailed => 412,
+            Self::PayloadTooLarge => 413,
+            Self::UnsupportedMediaType => 415,
+            Self::UnprocessableEntity => 422,
+            Self::Locked => 423,
+            Self::PreconditionRequired => 428,
+            Self::TooManyRequests => 429,
+            Self::NotImplemented => 501,
+            Self::ServiceUnavailable => 503,
+            Self::GatewayTimeout => 504,
+            Self::Other(status) => *status,
         }
     }
 
@@ -423,20 +577,55 @@ impl CqrsErrorCode for GenericErrorCode {
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::Gone => StatusCode::GONE,
+            Self::PaymentRequired => StatusCode::PAYMENT_REQUIRED,
+            Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
+            Self::NotAcceptable => StatusCode::NOT_ACCEPTABLE,
+            Self::RequestTimeout => StatusCode::REQUEST_TIMEOUT,
+            Self::PreconditionFailed => StatusCode::PRECONDITION_FAILED,
+            Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Self::UnprocessableEntity => StatusCode::UNPROCESSABLE_ENTITY,
+            Self::Locked => StatusCode::LOCKED,
+            Self::PreconditionRequired => StatusCode::PRECONDITION_REQUIRED,
+            Self::TooManyRequests => StatusCode::TOO_MANY_REQUESTS,
+            Self::NotImplemented => StatusCode::NOT_IMPLEMENTED,
+            Self::ServiceUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+            Self::GatewayTimeout => StatusCode::GATEWAY_TIMEOUT,
+            Self::Other(status) => {
+                StatusCode::from_u16(*status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+            }
         }
     }
 }
 
 impl From<StatusCode> for GenericErrorCode {
+    /// Maps an HTTP status to its dedicated variant, falling back to
+    /// [`GenericErrorCode::Other`] — which preserves the status — instead of
+    /// degrading unknown statuses to 500.
     fn from(status: StatusCode) -> Self {
         match status.as_u16() {
             400 => GenericErrorCode::ValidationFailed,
             401 => GenericErrorCode::Unauthorized,
+            402 => GenericErrorCode::PaymentRequired,
             403 => GenericErrorCode::Forbidden,
             404 => GenericErrorCode::NotFound,
+            405 => GenericErrorCode::MethodNotAllowed,
+            406 => GenericErrorCode::NotAcceptable,
+            408 => GenericErrorCode::RequestTimeout,
             409 => GenericErrorCode::Conflict,
             410 => GenericErrorCode::Gone,
-            _ => GenericErrorCode::InternalError,
+            412 => GenericErrorCode::PreconditionFailed,
+            413 => GenericErrorCode::PayloadTooLarge,
+            415 => GenericErrorCode::UnsupportedMediaType,
+            422 => GenericErrorCode::UnprocessableEntity,
+            423 => GenericErrorCode::Locked,
+            428 => GenericErrorCode::PreconditionRequired,
+            429 => GenericErrorCode::TooManyRequests,
+            500 => GenericErrorCode::InternalError,
+            501 => GenericErrorCode::NotImplemented,
+            503 => GenericErrorCode::ServiceUnavailable,
+            504 => GenericErrorCode::GatewayTimeout,
+            other => GenericErrorCode::Other(other),
         }
     }
 }
@@ -574,6 +763,92 @@ mod tests {
         assert_eq!(err.code, "INFRASTRUCTURE_CONFLICT");
         assert_eq!(err.status, 409);
         assert!(err.message.contains("xyz"));
+    }
+
+    #[test]
+    fn test_from_status_keeps_historical_codes() {
+        // Indexes 0-6 must stay stable for backward compatibility.
+        for (status, code, internal) in [
+            (StatusCode::BAD_REQUEST, "GENERIC_VALIDATION_FAILED", 1001),
+            (StatusCode::NOT_FOUND, "GENERIC_NOT_FOUND", 1002),
+            (StatusCode::CONFLICT, "GENERIC_CONFLICT", 1003),
+            (StatusCode::UNAUTHORIZED, "GENERIC_UNAUTHORIZED", 1004),
+            (StatusCode::FORBIDDEN, "GENERIC_FORBIDDEN", 1005),
+            (StatusCode::GONE, "GENERIC_GONE", 1006),
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "GENERIC_INTERNAL_ERROR",
+                1000,
+            ),
+        ] {
+            let err = CqrsError::from_status(status, "boom");
+            assert_eq!(err.status, status.as_u16());
+            assert_eq!(err.code, code);
+            assert_eq!(err.internal_code, internal);
+        }
+    }
+
+    #[test]
+    fn test_from_status_supports_additional_statuses() {
+        for (status, code, internal) in [
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "GENERIC_UNPROCESSABLE_ENTITY",
+                1422,
+            ),
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                "GENERIC_TOO_MANY_REQUESTS",
+                1429,
+            ),
+            (
+                StatusCode::PRECONDITION_FAILED,
+                "GENERIC_PRECONDITION_FAILED",
+                1412,
+            ),
+            (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "GENERIC_UNSUPPORTED_MEDIA_TYPE",
+                1415,
+            ),
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "GENERIC_SERVICE_UNAVAILABLE",
+                1503,
+            ),
+            (
+                StatusCode::PAYMENT_REQUIRED,
+                "GENERIC_PAYMENT_REQUIRED",
+                1402,
+            ),
+        ] {
+            let err = CqrsError::from_status(status, "boom");
+            assert_eq!(err.status, status.as_u16(), "status for {status}");
+            assert_eq!(err.code, code);
+            assert_eq!(err.internal_code, internal);
+        }
+    }
+
+    #[test]
+    fn test_from_status_never_degrades_unknown_status() {
+        let err = CqrsError::from_status(StatusCode::IM_A_TEAPOT, "no coffee");
+        assert_eq!(err.status, 418);
+        assert_eq!(err.code, "GENERIC_HTTP_418");
+        assert_eq!(err.internal_code, 1418);
+        assert_eq!(err.http_status(), StatusCode::IM_A_TEAPOT);
+    }
+
+    #[test]
+    fn test_additional_convenience_constructors() {
+        assert_eq!(CqrsError::unprocessable("nope").status, 422);
+        assert_eq!(CqrsError::too_many_requests("slow down").status, 429);
+        assert_eq!(CqrsError::precondition_failed("etag").status, 412);
+        assert_eq!(CqrsError::precondition_required("etag").status, 428);
+        assert_eq!(CqrsError::unsupported_media_type("xml").status, 415);
+        assert_eq!(CqrsError::payload_too_large("too big").status, 413);
+        assert_eq!(CqrsError::not_implemented("later").status, 501);
+        assert_eq!(CqrsError::service_unavailable("maintenance").status, 503);
+        assert_eq!(CqrsError::gone("removed").status, 410);
     }
 
     #[test]

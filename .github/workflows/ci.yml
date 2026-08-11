@@ -23,6 +23,8 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Run clippy
         run: cargo clippy --all-features --all-targets -- -D warnings
+      - name: Run clippy (legacy error body, without problem-json)
+        run: cargo clippy --features rest --all-targets -- -D warnings
 
   build:
     name: Build
@@ -41,6 +43,8 @@ jobs:
         run: cargo build --features postgres
       - name: Build (mongodb)
         run: cargo build --features mongodb
+      - name: Build (rest + problem-json)
+        run: cargo build --features rest,problem-json
       - name: Build (all features)
         run: cargo build --all-features
 
@@ -80,6 +84,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Run lib tests
         run: cargo test --all-features
+      - name: Run lib tests (legacy error body, without problem-json)
+        run: cargo test --features rest
       - name: Run bank tests
         run: cargo test -p bank --all-features
         env:

@@ -32,10 +32,14 @@ pub use errors::*;
 mod event;
 pub use event::*;
 
+pub mod problem;
+
 mod event_store;
 pub use event_store::*;
 
 pub mod es;
+#[cfg(feature = "postgres")]
+pub mod pg;
 pub mod read;
 
 #[cfg(feature = "rest")]

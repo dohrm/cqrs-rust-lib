@@ -125,7 +125,7 @@ cqrs_async_trait! {
 impl<V, Q, M> Storage<V, Q> for SurrealDBStorage<V, Q, M>
 where
     V: Debug + Clone + Default + Serialize + DeserializeOwned + Send + Sync + HasId,
-    Q: Clone + Debug + DeserializeOwned + Send + Sync + Query,
+    Q: Clone + Debug + Send + Sync + Query,
     M: FieldMapper + Debug + Clone + Send + Sync,
 {
     fn type_name(&self) -> &str {
@@ -185,13 +185,7 @@ where
             let v: V = serde_json::from_value(row.data).map_err(CqrsError::serialization_error)?;
             items.push(v);
         }
-        let page = if limit_v > 0 { offset_v / limit_v } else { 0 };
-        Ok(Paged {
-            items,
-            total,
-            page_size: limit_v,
-            page,
-        })
+        Ok(Paged::new(items, total, offset_v, limit_v))
     }
 
     async fn find_by_id(
@@ -266,7 +260,7 @@ where
 pub struct SurrealDBFromSnapshotStorage<A, Q, M = DataPrefixMapper>
 where
     A: Aggregate,
-    Q: Debug + Clone + DeserializeOwned + Send + Sync + Query,
+    Q: Debug + Clone + Send + Sync + Query,
     M: FieldMapper + Debug + Clone + Send + Sync,
 {
     _phantom: PhantomData<A>,
@@ -276,7 +270,7 @@ where
 impl<A, Q> SurrealDBFromSnapshotStorage<A, Q, DataPrefixMapper>
 where
     A: Aggregate,
-    Q: Debug + Clone + DeserializeOwned + Send + Sync + Query,
+    Q: Debug + Clone + Send + Sync + Query,
 {
     #[must_use]
     pub fn new(inner: Arc<SurrealDBStorage<Snapshot<A>, Q, DataPrefixMapper>>) -> Self {
@@ -290,7 +284,7 @@ where
 impl<A, Q, M> SurrealDBFromSnapshotStorage<A, Q, M>
 where
     A: Aggregate,
-    Q: Debug + Clone + DeserializeOwned + Send + Sync + Query,
+    Q: Debug + Clone + Send + Sync + Query,
     M: FieldMapper + Debug + Clone + Send + Sync,
 {
     #[must_use]
@@ -306,7 +300,7 @@ cqrs_async_trait! {
 impl<A, Q, M> Storage<A, Q> for SurrealDBFromSnapshotStorage<A, Q, M>
 where
     A: Aggregate,
-    Q: Clone + Debug + DeserializeOwned + Send + Sync + Query,
+    Q: Clone + Debug + Send + Sync + Query,
     M: FieldMapper + Debug + Clone + Send + Sync,
 {
     fn type_name(&self) -> &str {
@@ -320,12 +314,7 @@ where
         context: CqrsContext,
     ) -> Result<Paged<A>, CqrsError> {
         let result = self.inner.filter(parent_id, query, context).await?;
-        Ok(Paged {
-            items: result.items.into_iter().map(|s| s.state).collect(),
-            total: result.total,
-            page: result.page,
-            page_size: result.page_size,
-        })
+        Ok(result.map(|s| s.state))
     }
 
     async fn find_by_id(
@@ -416,7 +405,7 @@ mod tests {
 
     // ── Setup helper ─────────────────────────────────────────────────────────
 
-    async fn setup() -> SurrealDBStorage<Article, ArticleQuery> {
+    async fn setup_for<Q>() -> SurrealDBStorage<Article, Q> {
         let db = connect("mem://").await.unwrap();
         db.use_ns("test").use_db("test").await.unwrap();
         db.query("DEFINE TABLE IF NOT EXISTS articles SCHEMALESS")
@@ -425,6 +414,10 @@ mod tests {
             .check()
             .unwrap();
         SurrealDBStorage::new(db, "article", "articles")
+    }
+
+    async fn setup() -> SurrealDBStorage<Article, ArticleQuery> {
+        setup_for().await
     }
 
     fn article(id: &str, title: &str, score: i32) -> Article {
@@ -544,5 +537,49 @@ mod tests {
             scores.windows(2).all(|w| w[0] <= w[1]),
             "items should be sorted ascending by score"
         );
+    }
+
+    /// `skip` deliberately not a multiple of `limit`, to check the offset is
+    /// applied verbatim and reported back untouched.
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    struct OffsetQuery;
+
+    impl Query for OffsetQuery {
+        fn pagination(&self) -> Option<Pagination> {
+            Some(Pagination {
+                skip: Some(3),
+                limit: Some(2),
+            })
+        }
+        fn sort(&self) -> Option<Vec<Sorter>> {
+            Some(vec![Sorter {
+                field: "score".into(),
+                direction: crate::read::sorter::SortDirection::Asc,
+            }])
+        }
+    }
+
+    #[tokio::test]
+    async fn filter_reports_the_exact_offset_window() {
+        let store = setup_for::<OffsetQuery>().await;
+        let ctx = CqrsContext::default();
+
+        for i in 1..=6i32 {
+            store
+                .save(article(&format!("a{i}"), "item", i * 10), ctx.clone())
+                .await
+                .unwrap();
+        }
+
+        let result = store.filter(None, OffsetQuery, ctx).await.unwrap();
+
+        assert_eq!(result.total, 6);
+        assert_eq!(result.skip, 3);
+        assert_eq!(result.limit, 2);
+        // page/pageSize stay available but are only a derived approximation
+        assert_eq!(result.page, 1);
+        assert_eq!(result.page_size, 2);
+        let scores: Vec<i32> = result.items.iter().map(|a| a.score).collect();
+        assert_eq!(scores, vec![40, 50]);
     }
 }

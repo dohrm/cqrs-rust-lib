@@ -12,37 +12,10 @@ fn map_pg_error<E: std::error::Error + Send + Sync + 'static>(e: E) -> CqrsError
     CqrsError::database_error(e)
 }
 
-/// Access to a `tokio_postgres::Client`.
-pub trait PgConn: Send + Sync {
-    fn client(&self) -> &Client;
-}
-
-cqrs_async_trait! {
-/// Factory / pool of connections.
-pub trait PgPool: Send + Sync + Debug + Clone + 'static {
-    type Connection: PgConn + Send + Sync + 'static;
-    async fn acquire(&self) -> Result<Self::Connection, CqrsError>;
-}
-}
-
-/// Wraps a single `Arc<Client>`. NOT safe for concurrent transactions.
-#[derive(Debug, Clone)]
-pub struct SharedClient(pub Arc<Client>);
-
-impl PgConn for SharedClient {
-    fn client(&self) -> &Client {
-        &self.0
-    }
-}
-
-cqrs_async_trait! {
-impl PgPool for SharedClient {
-    type Connection = SharedClient;
-    async fn acquire(&self) -> Result<Self::Connection, CqrsError> {
-        Ok(self.clone())
-    }
-}
-}
+// The connection abstraction lives in `crate::pg` — it is shared with the read
+// side. Re-exported here so existing `es::postgres::{PgConn, PgPool,
+// SharedClient}` paths keep working.
+pub use crate::pg::{PgConn, PgPool, SharedClient};
 
 /// Wraps a connection obtained from a `PgPool`, tracking transaction state.
 pub struct PgSession<C: PgConn + 'static> {
