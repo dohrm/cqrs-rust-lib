@@ -244,7 +244,7 @@ mod utoipa_impl {
 mod tests {
     use super::*;
     use crate::read::{Pagination, Query, Sorter};
-    use rest_sql::{Ast, Constraint, Operator, RestSql, Value};
+    use rest_sql::{filter, RestSql};
 
     #[derive(Debug, Clone, Default, serde::Serialize)]
     #[allow(dead_code)]
@@ -256,13 +256,8 @@ mod tests {
 
     impl Query for TestQuery {
         fn filter(&self) -> Option<RestSql> {
-            let name = self.name.as_ref()?;
-            RestSql::from_ast(Ast::Constraint(Constraint {
-                field: "name".into(),
-                operator: Operator::Eq,
-                value: Value::String(name.clone()),
-            }))
-            .ok()
+            let name = self.name.as_deref()?;
+            RestSql::from_ast(filter::eq("name", name)).ok()
         }
         fn pagination(&self) -> Option<Pagination> {
             None

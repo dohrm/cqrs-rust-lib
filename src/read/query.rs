@@ -63,7 +63,7 @@ pub trait Query: Debug + Serialize + MaybeSend + MaybeSync {
 /// Useful in `Query::filter()` overrides that need to combine the auto-derived
 /// filter with custom logic.
 pub fn derive_filter_from_serde<T: Serialize + ?Sized>(val: &T) -> Option<rest_sql::RestSql> {
-    use rest_sql::{Ast, Constraint, Operator};
+    use rest_sql::{Ast, filter};
 
     let json = serde_json::to_value(val).ok()?;
     let JsonValue::Object(map) = json else {
@@ -73,15 +73,7 @@ pub fn derive_filter_from_serde<T: Serialize + ?Sized>(val: &T) -> Option<rest_s
     let constraints: Vec<Ast> = map
         .into_iter()
         .filter(|(_, v)| !v.is_null())
-        .filter_map(|(k, v)| {
-            json_to_rsql_value(v).map(|rv| {
-                Ast::Constraint(Constraint {
-                    field: k,
-                    operator: Operator::Eq,
-                    value: rv,
-                })
-            })
-        })
+        .filter_map(|(k, v)| json_to_rsql_value(v).map(|rv| filter::eq(&k, rv)))
         .collect();
 
     Ast::try_and(constraints).and_then(|ast| rest_sql::RestSql::from_ast(ast).ok())

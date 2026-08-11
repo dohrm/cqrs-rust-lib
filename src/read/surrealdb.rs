@@ -358,7 +358,7 @@ mod tests {
     use crate::read::storage::Storage;
     use crate::read::Sorter;
     use crate::CqrsContext;
-    use rest_sql::{Ast, Constraint, Operator, RestSql, Value};
+    use rest_sql::{filter, RestSql};
     use serde::{Deserialize, Serialize};
     use surrealdb::engine::any::connect;
 
@@ -396,12 +396,7 @@ mod tests {
     impl Query for ArticleQuery {
         fn filter(&self) -> Option<RestSql> {
             let score = self.min_score?;
-            RestSql::from_ast(Ast::Constraint(Constraint {
-                field: "score".into(),
-                operator: Operator::Gte,
-                value: Value::Int(score as i64),
-            }))
-            .ok()
+            RestSql::from_ast(filter::gte("score", score as i64)).ok()
         }
 
         fn pagination(&self) -> Option<Pagination> {
