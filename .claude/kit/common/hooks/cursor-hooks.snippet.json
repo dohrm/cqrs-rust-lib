@@ -1,0 +1,9 @@
+{
+  "_comment": "COPY to .cursor/hooks.json (or merge the `hooks` key into an existing one). Cursor's beforeShellExecution payload carries the command as `command` at the top level rather than under `tool_input`, and expects {\"permission\": ...} instead of Claude's hookSpecificOutput — bash-guard.mjs detects both dialects and answers in the right one. THE EDIT TIER DOES NOT EXIST HERE: Cursor has no pre-edit hook (afterFileEdit runs after the write), so on Cursor only the shell guard and the git floor apply. Paths assume `add --agent cursor`, which puts the kit in .dev/kit/.",
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      { "command": "node .dev/kit/common/hooks/bash-guard.mjs" }
+    ]
+  }
+}

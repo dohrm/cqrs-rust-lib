@@ -1,0 +1,19 @@
+{
+  "_comment": "MERGE the `hooks` key into .claude/settings.json (the installer never writes it for you — same contract as lefthook.yml and the justfile). Paths assume the kit sits where `add --agent claude` puts it: .claude/kit/common/hooks/. Node >= 18, no dependencies. Both guards fail open by design; the doctrine and the honest limits are in ./README.md.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "node .claude/kit/common/hooks/bash-guard.mjs" }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          { "type": "command", "command": "node .claude/kit/common/hooks/edit-guard.mjs" }
+        ]
+      }
+    ]
+  }
+}

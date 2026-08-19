@@ -1,0 +1,32 @@
+# Mutation testing config — Tier 3 quality gate (CI only, NEVER in the git hook).
+# COPY to `<workspace>/.cargo/mutants.toml` and adapt the two marked lists.
+#
+# Why not in lefthook: cargo-mutants re-runs the test suite once per mutant —
+# minutes, not seconds. In a hook it would destroy the fast "agent closes its
+# own loop" loop. Mutation runs on the PR (changed code only, `--in-diff`) and
+# optionally as a nightly full sweep. See mutation-ci.yaml.
+#
+# cargo-mutants reads this file automatically (default path .cargo/mutants.toml).
+
+# ── ADAPT PER REPO — equivalent / low-value mutants ─────────────────────────
+# Mutating a trivial accessor to a constant is technically "missed" but carries
+# no behavioural risk (often an equivalent mutant). Skip such names to keep the
+# survivor list actionable. Add entries only with a one-line justification.
+# Example (ctm-k8s-operator): trivial getters.
+exclude_re = [
+    # "RegistryEntry::name",
+    # "RegistryEntry::property",
+]
+
+# ── ADAPT PER REPO — I/O-heavy code (integration-tested, not unit-testable) ──
+# Mutants here survive for the WRONG reason: no unit test can catch a mutated
+# I/O branch. Excluding avoids false survivors drowning the real signal.
+# Target pure logic (domain/aggregates); exclude reconcile loops, adapters,
+# binary entrypoints. Refine as pure logic is split out of I/O crates.
+exclude_globs = [
+    # "crates/operator/src/**",   # e.g. k8s reconcile loops = I/O
+    # "**/main.rs",               # binary entrypoints (arg parsing / wiring)
+]
+
+# ── Safety: never let a mutant that spins forever hang CI ───────────────────
+minimum_test_timeout = 30

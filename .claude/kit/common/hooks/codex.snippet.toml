@@ -1,0 +1,25 @@
+# Codex has NO hooks. So this tier is not a guard at all — it is a sandbox plus an
+# approval policy, which is a different mechanism with a different promise: it does
+# not know what `--no-verify` means, it only knows that writing outside the workspace
+# or reaching the network needs a human.
+#
+# COPY to .codex/config.toml at the repo root. Two caveats worth stating out loud:
+#   • Project config is loaded only for a TRUSTED project — which is the right design
+#     (a repo cannot grant itself more power by shipping a file), but it also means
+#     this file is inert until someone trusts the project. Verify with `codex` that
+#     the values took effect; do not assume them.
+#   • `approval_policy` is the whole enforcement. Set it to "never" and the sandbox
+#     stops asking, which turns this tier off.
+#
+# On Codex the load-bearing tier is therefore the git floor (lefthook) — the one
+# that is portable across every agent. See ./README.md.
+
+# What Codex may technically do: write inside the workspace, nothing outside it.
+sandbox_mode = "workspace-write"
+
+# When it must ask first: an escalation out of the sandbox becomes a human decision.
+approval_policy = "on-request"
+
+[sandbox_workspace_write]
+# Egress deny-by-default. A gate an agent can install a package to satisfy is not a gate.
+network_access = false

@@ -1,0 +1,34 @@
+{
+  "_comment": "MERGE the `permission` key into the repo's opencode.json. opencode has no hook process, so the guards become declarative patterns — less expressive (no reason string comes back to the agent), no script to run. Rules are evaluated by pattern and THE LAST MATCH WINS, so these must sit AFTER any broad rule of yours. There is deliberately no \"*\" entry here: adding one would silently redefine your default for every other command.",
+  "permission": {
+    "bash": {
+      "* --no-verify*": "deny",
+      "git commit -n*": "deny",
+      "*core.hooksPath*": "deny",
+      "lefthook uninstall*": "deny",
+      "LEFTHOOK=0*": "deny",
+      "SKIP=*": "deny",
+      "rm *review-report.md*": "deny",
+      "git push --force*main*": "ask",
+      "git push --force*master*": "ask",
+      "sed -i*lefthook*": "ask",
+      "sed -i*justfile*": "ask"
+    },
+    "edit": {
+      "lefthook.yml": "ask",
+      "lefthook.yaml": "ask",
+      "justfile": "ask",
+      "Justfile": "ask",
+      ".github/workflows/**": "ask",
+      ".gitea/workflows/**": "ask",
+      "opencode.json": "ask",
+      ".work/review-report.md": "ask",
+      ".coverage-baseline": "ask",
+      "**/mutants.toml": "ask",
+      "**/deny.toml": "ask",
+      "scripts/review-guard.mjs": "ask",
+      "scripts/adr-check.mjs": "ask",
+      "scripts/docs-check.mjs": "ask"
+    }
+  }
+}

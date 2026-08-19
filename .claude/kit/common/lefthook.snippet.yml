@@ -1,0 +1,37 @@
+# Common hooks — MERGE into the repo's root lefthook.yml. Install: lefthook install
+#
+# This is the GIT FLOOR of the gate layer. It is portable across every agent
+# and every machine, which is why the guarantees live here and not in a tool's hook
+# API (see hooks/README.md for the harness layer — per-tool, deeper, and never the only rampart).
+#
+# Two commands, and they are the only ones kit/common gets. Both are pure git or pure
+# Node — no LLM, milliseconds. Everything else (adr-check, docs-check) rides inside
+# `just check`, and the review itself costs minutes, so it stays a per-block command
+# like mutate-diff. Doctrine: rules/agent/autonomy.md.
+
+# The trunk is not a workspace: a merge is a human act, so a commit lands on a branch
+# and arrives through a PR. `only: ref` makes this a no-op on every other branch.
+#
+# OPT-OUT: a solo repo that legitimately commits on main deletes this command. Say so
+# out loud rather than working around it — that is the whole point of the layer.
+#
+# Editing the message? Keep ": " out of it. `run:` is a plain YAML scalar, and a
+# colon-space inside one is a parse error lefthook reports as "mapping values are not
+# allowed in this context" — an em dash costs nothing and cannot break the file.
+pre-commit:
+  parallel: true
+  commands:
+    no-commit-on-trunk:
+      only:
+        - ref: main
+        - ref: master
+      run: node -e "console.error('lefthook — this repo does not commit on the trunk. Branch, commit there, open a PR. (Solo repo that really does commit on main? Delete the no-commit-on-trunk command.)'); process.exit(1)"
+
+# pre-push and NEVER pre-commit: a review's cadence is per push, and what the guard
+# defends is the moment code leaves the machine with an unanswered CRITICAL in the
+# report. No glob — a verdict is about the branch, not about a file type.
+pre-push:
+  parallel: true
+  commands:
+    review-guard:
+      run: just review-guard

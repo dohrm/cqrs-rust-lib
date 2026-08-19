@@ -1,0 +1,10 @@
+{
+  "repo": "dohrm/claude-rules",
+  "ref": "main",
+  "profiles": [
+    "rust"
+  ],
+  "agents": [
+    "claude"
+  ]
+}

@@ -1,0 +1,87 @@
+name: Mutation
+
+# Tier 3 quality gate: are the tests meaningful, or do they just execute code
+# without asserting? Coverage says nothing about this; mutation score does. This
+# is the gate that lets AI-written unit tests be trusted without reading every
+# assertion by hand.
+#
+# Runs on PR against changed code only (`--in-diff`) so it stays minutes, not
+# hours. Scoping/exclusions live in .cargo/mutants.toml (I/O crates, getters).
+#
+# This job is the WITNESS, not the first observation: the same run happens
+# locally via `just rust-mutate` before the push (the merge-base diff is
+# computable on a laptop). If survivors are being discovered here rather than in
+# the editor, the local loop is not being run — see rules/testing/ratchet.md.
+#
+# CALIBRATION PHASE: this job is NON-BLOCKING (continue-on-error) on purpose. A
+# healthy repo often sits ~70% (below a naive 0.75 bar). First establish
+# per-crate baselines, triage real gaps vs equivalent mutants, THEN flip to
+# blocking with a ratcheted threshold ("no lower than baseline").
+#
+# COPY to .gitea/workflows/mutation.yaml (or .github/workflows/). ADAPT the
+# runner bits (runs-on, RUSTC_WRAPPER, CARGO_TARGET_DIR) to your CI.
+# WINDOWS CI: set runs-on to your windows label and add `shell: bash` to the
+# `run:` steps below (git-bash ships on Windows runners), or rewrite them in
+# PowerShell. cargo-mutants itself runs fine on Windows.
+
+on:
+  pull_request:
+    branches:
+      - main
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  mutation:
+    runs-on: linux                     # ADAPT to your runner label
+    continue-on-error: true            # ← remove once baselines are ratcheted
+    # ADAPT (optional): on a persistent self-hosted runner, a shared compiler cache and
+    # a target dir OUTSIDE the workspace turn a 20-minute mutation run into a few. Both
+    # are paths on YOUR runner, so they are commented out — an absolute path from
+    # someone else's machine is a silent failure waiting on yours.
+    # env:
+    #   RUSTC_WRAPPER: sccache            # or the absolute path on your runner
+    #   CARGO_TARGET_DIR: <a writable dir on the runner, outside the workspace>
+    defaults:
+      run:
+        working-directory: .             # ADAPT to your rust_dir (e.g. api)
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0               # need the base branch to compute the diff
+          token: ${{ secrets.CI_TOKEN }}
+
+      # Prefer baking cargo-mutants into the runner image; this is the fallback.
+      - name: Ensure cargo-mutants
+        run: command -v cargo-mutants >/dev/null 2>&1 || cargo install cargo-mutants --locked
+
+      # `--relative` makes the paths workspace-relative, which is what
+      # cargo-mutants expects when the Rust workspace is NOT at the repo root.
+      # Same command as the local `just rust-mutate` recipe — one definition.
+      - name: Compute PR diff
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          git diff "origin/${{ github.base_ref }}...HEAD" --relative -- . > pr.diff
+          echo "Changed hunks:"; git --no-pager diff --stat "origin/${{ github.base_ref }}...HEAD" -- .
+
+      - name: Mutation testing (changed code only)
+        run: cargo mutants --in-diff pr.diff --no-shuffle -j 2 --colors never
+
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-out
+          path: mutants.out/
+
+# ---------------------------------------------------------------------------
+# Nightly full sweep (enable when ready): track the score over time and catch
+# erosion outside changed lines.
+#   on:
+#     schedule:
+#       - cron: '0 3 * * *'
+#   then run: cargo mutants --no-shuffle -j 4   (config still scopes out I/O)
+# ---------------------------------------------------------------------------

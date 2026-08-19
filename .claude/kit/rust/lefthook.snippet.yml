@@ -1,0 +1,21 @@
+# Rust hooks — MERGE into the repo's root lefthook.yml. Install: lefthook install
+#
+# Thin triggers only: the actual commands live in the justfile recipes
+# (rust-lint / rust-check), which hold the path via the `rust_dir` variable.
+# The glob matches Rust anywhere in the tree, so it is layout-agnostic — no path
+# here. glob decides IF the recipe fires; the recipe covers the whole workspace.
+# Mutation (Tier 3) is CI-only (mutation-ci.yaml), never a hook.
+
+pre-commit:
+  parallel: true
+  commands:
+    rust:
+      glob: "**/*.rs"
+      run: just rust-lint
+
+pre-push:
+  parallel: true
+  commands:
+    rust:
+      glob: "**/*.rs"
+      run: just rust-check
