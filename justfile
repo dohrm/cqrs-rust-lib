@@ -18,6 +18,10 @@ python_dir := "."    # e.g. "services/ingest"
 # claude-rules:end
 base     := "origin/main"   # branch a feature is measured against (Tier 3)
 
+# The kit installs its Node gates and the review prompt under .claude/kit/common/;
+# the recipes below are the only readers, so the path has ONE home here.
+kit      := ".claude/kit/common"
+
 # Full local self-verify (Tiers 1-2) across the techs you have — the command an
 # agent closes its loop on before handing back, in seconds. Tier 3 (mutation)
 # is deliberately NOT in here: it costs minutes, so it runs per coherent block
@@ -25,15 +29,29 @@ base     := "origin/main"   # branch a feature is measured against (Tier 3)
 # `claude-rules init` derives this line from the locked language profiles when it
 # CREATES the justfile — after that the recipe is yours, and init only reports a
 # disagreement with the lock. Add the opt-in gates below as you enable them:
-check: rust-check
+# adr-check and docs-check joined the gate with docs/adr/0001: a decision record whose
+# shape nothing verifies is a record that drifts. Both are no-ops when their directory
+# is absent, and both are Node, so `check` stays cross-platform.
+check: rust-check adr-check docs-check
 # check: rust-check ts-check go-check python-check adr-check docs-check rules-check
 
 # ── Rust ─────────────────────────────────────────────────────────────────
 # Each line runs in its own shell, so `cd {{dir}} &&` per line (portable: works
-# in sh/cmd/pwsh). Split: *-lint is the fast pre-commit tier, *-check the full.
+# in sh/cmd/pwsh). Split: *-lint is fmt+clippy, *-check adds tests and the supply chain.
+# The two clippy lines cover both feature sets .github/workflows/ci.yml's lint job
+# builds, plus the examples (CI lints the root package only). Both lines are needed:
+# `--workspace` unifies features, and the examples pull in postgres+mongodb+surrealdb,
+# so a helper used only by a feature-gated backend looks alive under a workspace lint
+# and is `dead_code` in the narrower set. Measured: two such functions passed
+# `just check` and failed CI's legacy-path clippy.
+#
+# This is the slower of the two tiers — the feature sets do not share a build — but
+# lefthook's pre-commit runs its own inline clippy, not this recipe, so nothing that
+# has to be fast pays for it.
 rust-lint:
     cd {{rust_dir}} && cargo fmt --all --check
-    cd {{rust_dir}} && cargo clippy --workspace --all-targets -- -D warnings
+    cd {{rust_dir}} && cargo clippy --workspace --all-targets --all-features -- -D warnings
+    cd {{rust_dir}} && cargo clippy --features rest --all-targets -- -D warnings
 rust-check: rust-lint
     cd {{rust_dir}} && cargo test --workspace
     cd {{rust_dir}} && cargo deny check licenses advisories sources
@@ -75,6 +93,35 @@ python-check: python-lint
     cd {{python_dir}} && uv run --locked pytest
     cd {{python_dir}} && uv run --locked pip-audit
     cd {{python_dir}} && uv run --locked deptry .
+
+# ── Test databases ─────────────────────────────────────────────────────────
+# The integration suites and the examples need a real server. `compose.yaml` starts one
+# of each on a shifted port, so this stack can never be confused with — or collide with —
+# a database already running on the machine. Nothing persists: `db-down` takes the data.
+#
+# Both suites skip when their variable is unset, so `just check` stays green without any
+# of this; `just test-db` is what opts in.
+pg_test_uri    := "postgres://cqrs:cqrs@127.0.0.1:55432/cqrs_test"
+mongo_test_uri := "mongodb://127.0.0.1:37017/?directConnection=true"
+surreal_uri    := "ws://127.0.0.1:18000"
+
+# `directConnection=true` on the Mongo URI is required, not decoration: the event store
+# opens a transaction, which needs a replica set, and a single-node set would otherwise
+# hand the driver its own announced host to re-dial.
+db-up:
+    podman compose -f compose.yaml up -d
+    @until [ "$(podman ps --filter name=cqrs-rust-lib-test --format '{{{{.Status}}' | grep -c healthy)" -ge 3 ]; do sleep 1; done
+    @echo "postgres {{pg_test_uri}}"
+    @echo "mongodb  {{mongo_test_uri}}"
+    @echo "surreal  {{surreal_uri}}"
+
+db-down:
+    podman compose -f compose.yaml down -v
+
+# The suites that need a server. Everything else already runs under `just check`.
+test-db:
+    cd {{rust_dir}} && PG_TEST_URI="{{pg_test_uri}}" cargo test -p todolist
+    cd {{rust_dir}} && MONGODB_TEST_URI="{{mongo_test_uri}}" cargo test -p bank
 
 # ── Tier 3 — do the tests ASSERT, or do they merely execute? ───────────────
 # Coverage cannot answer that; mutation can. Minutes, not seconds — so this is
@@ -125,7 +172,7 @@ python-mutate:
 
 # ── Code review (Tier 3 — judgment, not correctness) ───────────────────────
 # Same cadence as mutate-diff: once per coherent block, BEFORE the push. One
-# reviewer, one process, one prompt (scripts/review-prompt.md) — any agent CLI runs
+# reviewer, one process, one prompt ({{kit}}/review-prompt.md) — any agent CLI runs
 # it. stdout IS the report, and the recipe parks it in .work/review-report.md, so
 # gitignore `.work/`: a report is working memory, never a committed artifact.
 #
@@ -187,12 +234,12 @@ review_cmd  := "claude -p --disallowedTools '" + review_deny + "' --allowedTools
 # you have to remember to go and read. Needs a POSIX shell.
 code-review:
     mkdir -p .work
-    sed -e 's|{{{{base}}|{{base}}|g' -e "s|{{{{sha}}|$(git rev-parse HEAD)|g" scripts/review-prompt.md > .work/prompt.md
+    sed -e 's|{{{{base}}|{{base}}|g' -e "s|{{{{sha}}|$(git rev-parse HEAD)|g" {{kit}}/review-prompt.md > .work/prompt.md
     printf '\n\n=== DIFF UNDER REVIEW ===\n\n' >> .work/prompt.md
     git diff {{base}}...HEAD >> .work/prompt.md
     {{review_cmd}} < .work/prompt.md > .work/review.tmp
     mv .work/review.tmp .work/review-report.md
-    node scripts/review-guard.mjs
+    node {{kit}}/review-guard.mjs
 
 # The deterministic half of the review — pure Node, no LLM, milliseconds. THAT is
 # why it can be a hook (pre-push; never pre-commit, the cadence is per push). It
@@ -202,7 +249,7 @@ code-review:
 # malformed one blocks. One test per arm in test/gates.test.mjs; doctrine:
 # rules/agent/autonomy.md.
 review-guard:
-    node scripts/review-guard.mjs
+    node {{kit}}/review-guard.mjs
 
 # ── Duplication (opt-in) ───────────────────────────────────────────────────
 # Copy-paste is an agent's native failure mode, and it is the one "AI slop
@@ -222,9 +269,9 @@ dup-check:
 # Doctrine: rules/agent/decisions.md. Node (>=18) rather than bash, so `just check`
 # stays cross-platform; the script is a no-op when there are no ADRs.
 adr-check:
-    node scripts/adr-check.mjs
+    node {{kit}}/adr-check.mjs
     # Size/section budgets are advisory above. Enforce them with:
-    #   node scripts/adr-check.mjs docs/adr --strict
+    #   node {{kit}}/adr-check.mjs docs/adr --strict
     # Move the ceiling for THIS repo in .docs-budgets.json (never in the script — an
     # update overwrites it):  { "adr": { "unitCeiling": 900 } }
 
@@ -233,11 +280,11 @@ adr-check:
 # A document meant to grow is a directory of units plus a compacted index — this fails
 # on an index and its units disagreeing (dangling link, unreferenced unit) and warns on
 # the budgets. Doctrine: rules/product/documents.md. No-op with no docs/.
-# Enforce the budgets too with: node scripts/docs-check.mjs docs --strict
+# Enforce the budgets too with: node {{kit}}/docs-check.mjs docs --strict
 # Budgets are defaults — move them for THIS repo in .docs-budgets.json (never in the
 # script, which an update overwrites):  { "prd": { "indexCeiling": 1500 } }
 docs-check:
-    node scripts/docs-check.mjs
+    node {{kit}}/docs-check.mjs
 
 # ── The agent install itself ───────────────────────────────────────────────
 # Opt-in: add `rules-check` to `check` above once the install has settled. It audits

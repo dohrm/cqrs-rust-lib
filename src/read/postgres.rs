@@ -1,6 +1,7 @@
 use crate::pg::{PgConn, PgPool, SharedClient};
+use crate::read::page_order::warn_if_page_order_undefined;
 use crate::read::query::Query;
-use crate::read::sorter::{SortDirection, Sorter};
+use crate::read::sorter::order_by_clause;
 use crate::read::storage::{HasId, Storage, StorageError};
 use crate::read::Paged;
 use crate::{Aggregate, CqrsContext, CqrsError, Snapshot};
@@ -17,25 +18,6 @@ use tokio_postgres::{types::ToSql, Client};
 
 fn map_pg_error<E: std::error::Error + Send + Sync + 'static>(e: E) -> CqrsError {
     CqrsError::database_error(e)
-}
-
-fn sorters_to_order_by(sort: Option<Vec<Sorter>>, mapper: &impl FieldMapper) -> String {
-    let sorters = match sort {
-        Some(s) if !s.is_empty() => s,
-        _ => return String::new(),
-    };
-    let parts: Vec<String> = sorters
-        .iter()
-        .map(|s| {
-            let field = mapper.map(&s.field);
-            let dir = match s.direction {
-                SortDirection::Asc => "ASC",
-                SortDirection::Desc => "DESC",
-            };
-            format!("{} {}", field, dir)
-        })
-        .collect();
-    format!(" ORDER BY {}", parts.join(", "))
 }
 
 /// Read-side storage backed by a JSONB `data` column.
@@ -166,7 +148,9 @@ where
         let pagination = query.pagination().unwrap_or_default();
         let limit_v = pagination.limit.unwrap_or(20);
         let offset_v = pagination.skip.unwrap_or(0);
-        let order_by = sorters_to_order_by(query.sort(), &self.mapper);
+        let sort = query.sort();
+        warn_if_page_order_undefined(&self.type_name, offset_v, sort.as_deref());
+        let order_by = order_by_clause(sort, &self.mapper)?;
 
         let conn = self.pool.acquire().await?;
 
@@ -364,6 +348,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::log_capture::{containing, events_of_async};
+    use crate::read::sorter::{SortDirection, Sorter};
+    use crate::read::Pagination;
     use serde::Deserialize;
 
     #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -436,6 +423,109 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.message.contains("pool exhausted"));
+    }
+
+    /// A query whose sort is whatever the caller asked for — the untrusted path.
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    struct SortedQuery(Vec<Sorter>);
+
+    impl Query for SortedQuery {
+        fn sort(&self) -> Option<Vec<Sorter>> {
+            Some(self.0.clone())
+        }
+    }
+
+    fn asc(field: &str) -> Sorter {
+        Sorter {
+            field: field.to_string(),
+            direction: SortDirection::Asc,
+        }
+    }
+
+    /// A query that asks for a later page and declares no sort — the shape #5 is about.
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    struct SecondPageQuery;
+
+    impl Query for SecondPageQuery {
+        fn pagination(&self) -> Option<Pagination> {
+            Some(Pagination {
+                skip: Some(20),
+                limit: Some(20),
+            })
+        }
+    }
+
+    /// The warning is wired into `filter`, not merely available: delete the call and
+    /// this fails. No server needed — the warn happens before `pool.acquire()`.
+    #[tokio::test]
+    async fn filter_warns_when_paging_without_a_sort() {
+        // A view name of its own: the warning is once-per-view and process-global.
+        let storage: PostgresStorage<Article, SecondPageQuery, IdentityMapper, FailingPool> =
+            PostgresStorage::with_pool(FailingPool, "pg_unsorted_view", "articles");
+
+        let events = events_of_async(async {
+            let _ = storage
+                .filter(None, SecondPageQuery, CqrsContext::default())
+                .await;
+        })
+        .await;
+
+        let ours = containing(&events, "no sort in effect");
+        assert_eq!(ours.len(), 1, "exactly one warning, got {events:?}");
+        assert!(ours[0].starts_with("WARN "), "{}", ours[0]);
+        assert!(
+            ours[0].contains("type_name=pg_unsorted_view"),
+            "{}",
+            ours[0]
+        );
+        assert!(ours[0].contains("skip=20"), "{}", ours[0]);
+    }
+
+    /// And it stays quiet when the view declares a sort — the remedy actually works.
+    #[tokio::test]
+    async fn filter_is_quiet_when_the_view_declares_a_sort() {
+        let storage: PostgresStorage<Article, SortedQuery, IdentityMapper, FailingPool> =
+            PostgresStorage::with_pool(FailingPool, "pg_sorted_view", "articles");
+
+        let events = events_of_async(async {
+            let _ = storage
+                .filter(
+                    None,
+                    SortedQuery(vec![asc("created_at")]),
+                    CqrsContext::default(),
+                )
+                .await;
+        })
+        .await;
+
+        assert!(
+            containing(&events, "no sort in effect").is_empty(),
+            "got {events:?}"
+        );
+    }
+
+    /// End-to-end through `Storage::filter`, no server: the sort is rejected *before*
+    /// `pool.acquire()` runs, so the error is the validation one and not the pool's.
+    /// That is what "fails closed" means here — a bad sort never opens a connection.
+    #[tokio::test]
+    async fn filter_rejects_a_hostile_sort_before_touching_the_database() {
+        let storage: PostgresStorage<Article, SortedQuery, IdentityMapper, FailingPool> =
+            PostgresStorage::with_pool(FailingPool, "article", "articles");
+
+        let err = storage
+            .filter(
+                None,
+                SortedQuery(vec![asc("1 UNION ALL SELECT data FROM secrets--")]),
+                CqrsContext::default(),
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.code, "GENERIC_VALIDATION_FAILED");
+        assert!(
+            !err.message.contains("pool exhausted"),
+            "the sort must be rejected before the pool is asked for a connection"
+        );
     }
 
     #[test]

@@ -1,0 +1,71 @@
+# Test databases for the integration suites and the examples.
+#
+#   just db-up      # start and wait until all three answer
+#   just test-db    # run the integration tests against them
+#   just db-down    # stop and delete the volumes
+#
+# Ports are shifted off the defaults on purpose: this is a throwaway test stack and it
+# must never collide with — or worse, be mistaken for — a database already running on
+# this machine. Nothing here persists: no named volumes, `db-down` takes the data with it.
+name: cqrs-rust-lib-test
+
+services:
+  # 5432 -> 55432
+  postgres:
+    image: docker.io/library/postgres:17-alpine
+    environment:
+      POSTGRES_USER: cqrs
+      POSTGRES_PASSWORD: cqrs
+      POSTGRES_DB: cqrs_test
+      # The data lives in tmpfs (below), so durability is pure overhead here.
+      PGDATA: /var/lib/postgresql/data
+    command: ["postgres", "-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off"]
+    ports:
+      - "127.0.0.1:55432:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cqrs -d cqrs_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # 27017 -> 37017, and mongod listens on 37017 *inside* the container too.
+  #
+  # That is not cosmetic. `MongoDBPersist` opens a transaction (src/es/mongodb.rs), which
+  # a standalone mongod refuses — it needs a replica set. A single-node set announces its
+  # member by host:port, and the driver on the host then dials whatever it was told, so
+  # the port has to mean the same thing on both sides of the container boundary.
+  mongodb:
+    image: docker.io/library/mongo:8
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all", "--port", "37017"]
+    ports:
+      - "127.0.0.1:37017:37017"
+    tmpfs:
+      - /data/db
+    healthcheck:
+      # Initiates the set on the first probe, then just reports whether it is up.
+      test:
+        - "CMD-SHELL"
+        - >-
+          mongosh --quiet --port 37017 --eval
+          "try { rs.status().ok } catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'localhost:37017'}]}).ok }"
+          | grep -q 1
+      interval: 2s
+      timeout: 10s
+      retries: 40
+      start_period: 5s
+
+  # 8000 -> 18000. Not needed by `cargo test` — the library's SurrealDB tests run against
+  # the in-memory engine — but `example/ludotheque` reads SURREAL_URI and this is what it
+  # points at.
+  surrealdb:
+    image: docker.io/surrealdb/surrealdb:v3.2
+    command: ["start", "--user", "root", "--pass", "root", "--bind", "0.0.0.0:8000", "memory"]
+    ports:
+      - "127.0.0.1:18000:8000"
+    healthcheck:
+      test: ["CMD", "/surreal", "is-ready", "--endpoint", "http://localhost:8000"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

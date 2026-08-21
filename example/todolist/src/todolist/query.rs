@@ -7,4 +7,6 @@ pub struct TodoListQuery {
     pub name: Option<String>,
 }
 
+// No default_sort(): unpaged, and the 20 rows returned are an arbitrary subset of the
+// matches — declare a sort if the order matters. See Pagination in cqrs_rust_lib.
 impl Query for TodoListQuery {}

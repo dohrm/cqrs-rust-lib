@@ -8,15 +8,20 @@ mod integration_tests {
     use std::env;
     use std::fmt::Debug;
 
-    async fn setup_test_db() -> Database {
-        let mongodb_uri = env::var("MONGODB_TEST_URI")
-            .unwrap_or_else(|_| "mongodb://localhost:27017".to_string());
+    /// `None` when `MONGODB_TEST_URI` is unset, so the suite skips instead of failing.
+    ///
+    /// It used to default to `mongodb://localhost:27017`, which meant `cargo test
+    /// --workspace` hung for 60s and then failed on any machine without a server — the
+    /// same shape `setup_pg` in the todolist example already avoided. `just db-up`
+    /// provides the URI; `just test-db` passes it in.
+    async fn setup_test_db() -> Option<Database> {
+        let mongodb_uri = env::var("MONGODB_TEST_URI").ok()?;
         let client = Client::with_uri_str(&mongodb_uri)
             .await
-            .expect("Failed to connect to MongoDB");
+            .expect("MONGODB_TEST_URI is set but does not parse");
         let database = client.database("test_db");
         let _r = database.drop().await;
-        database
+        Some(database)
     }
 
     async fn testcases<P>(store: P)
@@ -85,7 +90,10 @@ mod integration_tests {
 
     #[tokio::test]
     async fn test_mongodb_event_store() {
-        let db = setup_test_db().await;
+        let Some(db) = setup_test_db().await else {
+            eprintln!("skipped: MONGODB_TEST_URI unset — run `just db-up` then `just test-db`");
+            return;
+        };
         let store = cqrs_rust_lib::prelude::mongodb::EventStorePersist::<Account>::new(db);
         testcases(store).await;
     }

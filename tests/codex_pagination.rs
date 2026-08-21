@@ -40,9 +40,17 @@ impl HasId for Article {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct ArticleQuery {
     min_score: Option<i32>,
+    /// Declared because `_q` names it below. `_q` may only name fields of the query
+    /// struct, so a filterable field has to exist here — that is the whole rule.
+    score: Option<i32>,
 }
 
 impl Query for ArticleQuery {
+    /// `score` is sortable as well as filterable; `default_sort` uses it too.
+    fn sortable_fields(&self) -> Vec<&str> {
+        vec!["id", "score"]
+    }
+
     fn default_sort() -> Option<Vec<Sorter>> {
         Some(vec![Sorter {
             field: "score".into(),

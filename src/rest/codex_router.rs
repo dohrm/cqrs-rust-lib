@@ -80,7 +80,14 @@ where
             Self::base_path_parameters(),
             CqrsHttpQuery::<Q>::into_params(|| Some(ParameterIn::Query)),
             None,
-            &[StatusCode::BAD_REQUEST, StatusCode::INTERNAL_SERVER_ERROR],
+            // 422 is what the extractor answers for a malformed `_q` or pagination
+            // param; 400 stays reachable because `sort` is validated at the storage
+            // layer. Both, not one or the other.
+            &[
+                StatusCode::BAD_REQUEST,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ],
         );
 
         let find_many_handler = if V::IS_CHILD_OF_AGGREGATE {
@@ -193,5 +200,117 @@ where
                 .into_response(),
             Err(err) => err.with_request_id_if_absent(request_id).into_response(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::read::storage::Storage;
+    use crate::testing::{TestAggregate, TestView};
+    use crate::{MaybeSend, MaybeSync};
+    use std::sync::Arc;
+
+    #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, IntoParams)]
+    struct TestQuery {
+        name: Option<String>,
+    }
+
+    impl Query for TestQuery {}
+
+    /// The router only needs *a* storage to build its routes; nothing here calls it.
+    #[derive(Debug, Clone)]
+    struct NoopStorage;
+
+    cqrs_async_trait! {
+    impl<V, Q> Storage<V, Q> for NoopStorage
+    where
+        V: Debug
+            + Clone
+            + Default
+            + serde::Serialize
+            + DeserializeOwned
+            + MaybeSend
+            + MaybeSync
+            + 'static,
+        Q: Clone + Debug + MaybeSend + MaybeSync + 'static,
+    {
+        fn type_name(&self) -> &str {
+            "test"
+        }
+        async fn filter(
+            &self,
+            _parent_id: Option<String>,
+            _query: Q,
+            _context: CqrsContext,
+        ) -> Result<Paged<V>, CqrsError> {
+            Ok(Paged::new(Vec::new(), 0, 0, 20))
+        }
+        async fn find_by_id(
+            &self,
+            _parent_id: Option<String>,
+            _id: &str,
+            _context: CqrsContext,
+        ) -> Result<Option<V>, CqrsError> {
+            Ok(None)
+        }
+        async fn save(&self, _view: V, _context: CqrsContext) -> Result<(), CqrsError> {
+            Ok(())
+        }
+    }
+    }
+
+    fn generated_openapi() -> utoipa::openapi::OpenApi {
+        let storage: DynStorage<TestView, CqrsHttpQuery<TestQuery>> = Arc::new(NoopStorage);
+        let (_router, api) =
+            CQRSCodexReadRouter::<TestAggregate, TestView, TestQuery>::routes(storage, "test")
+                .split_for_parts();
+        api
+    }
+
+    /// A generated client learns the status from the document or not at all, and 422 is
+    /// now the answer to the commonest client mistake — a malformed `_q` or pagination
+    /// param. 400 stays: `sort` is validated at the storage layer.
+    /// Both routes are GETs, so the list route is named, not guessed: `find_one` carries
+    /// the id path segment and `find_many` does not. Picking "the first GET" would let
+    /// this pass while `find_many` silently lost a status.
+    fn list_route_responses() -> utoipa::openapi::Responses {
+        let api = generated_openapi();
+        let id_segment = format!("{{{}_id}}", TestView::TYPE);
+        let (_, item) = api
+            .paths
+            .paths
+            .iter()
+            .find(|(path, item)| item.get.is_some() && !path.ends_with(&id_segment))
+            .expect("the list route is the GET without the id segment");
+        item.get
+            .as_ref()
+            .expect("a GET operation")
+            .responses
+            .clone()
+    }
+
+    #[test]
+    fn the_list_route_declares_both_client_error_statuses() {
+        let responses = list_route_responses().responses;
+
+        for status in ["400", "422", "500"] {
+            assert!(
+                responses.contains_key(status),
+                "the list route must declare {status}; it declares {:?}",
+                responses.keys().collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn the_router_generates_both_read_routes() {
+        let api = generated_openapi();
+        assert_eq!(
+            api.paths.paths.len(),
+            2,
+            "one list route and one find-by-id route, got {:?}",
+            api.paths.paths.keys().collect::<Vec<_>>()
+        );
     }
 }

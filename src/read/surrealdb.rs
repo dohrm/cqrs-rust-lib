@@ -1,5 +1,6 @@
+use crate::read::page_order::warn_if_page_order_undefined;
 use crate::read::query::{Pagination, Query};
-use crate::read::sorter::{SortDirection, Sorter};
+use crate::read::sorter::order_by_clause;
 use crate::read::storage::{HasId, Storage, StorageError};
 use crate::read::Paged;
 use crate::{Aggregate, CqrsContext, CqrsError, Snapshot};
@@ -30,25 +31,6 @@ impl FieldMapper for DataPrefixMapper {
     fn map<'a>(&self, field: &'a str) -> Cow<'a, str> {
         Cow::Owned(format!("data.{}", field))
     }
-}
-
-fn sorters_to_order_by(sort: Option<Vec<Sorter>>, mapper: &impl FieldMapper) -> String {
-    let sorters = match sort {
-        Some(s) if !s.is_empty() => s,
-        _ => return String::new(),
-    };
-    let parts: Vec<String> = sorters
-        .iter()
-        .map(|s| {
-            let field = mapper.map(&s.field);
-            let dir = match s.direction {
-                SortDirection::Asc => "ASC",
-                SortDirection::Desc => "DESC",
-            };
-            format!("{} {}", field, dir)
-        })
-        .collect();
-    format!("ORDER BY {}", parts.join(", "))
 }
 
 #[derive(Debug, serde::Deserialize, SurrealValue)]
@@ -147,11 +129,13 @@ where
             None => None,
         };
         let where_clause = self.build_where(user_filter, &parent_id)?;
-        let order_by = sorters_to_order_by(query.sort(), &self.mapper);
-
         let Pagination { skip, limit } = query.pagination().unwrap_or_default();
         let limit_v = limit.unwrap_or(20).max(0);
         let offset_v = skip.unwrap_or(0).max(0);
+
+        let sort = query.sort();
+        warn_if_page_order_undefined(&self.type_name, offset_v, sort.as_deref());
+        let order_by = order_by_clause(sort, &self.mapper)?;
 
         let count_sql = format!(
             "SELECT count() AS cnt FROM {} {} GROUP ALL",
@@ -167,7 +151,7 @@ where
 
         // SELECT * so fields referenced in ORDER BY are projected (SurrealDB v3 requirement).
         let select_sql = format!(
-            "SELECT * FROM {} {} {} LIMIT $__cqrs_limit START $__cqrs_offset",
+            "SELECT * FROM {} {}{} LIMIT $__cqrs_limit START $__cqrs_offset",
             self.table_name, where_clause, order_by
         );
         let mut select_q = self
@@ -343,6 +327,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::log_capture::{containing, events_of_async};
     use crate::read::query::{Pagination, Query};
     use crate::read::storage::Storage;
     use crate::read::Sorter;
@@ -405,7 +390,10 @@ mod tests {
 
     // ── Setup helper ─────────────────────────────────────────────────────────
 
-    async fn setup_for<Q>() -> SurrealDBStorage<Article, Q> {
+    /// A fresh in-memory store. The view name is a parameter because the page-order
+    /// warning is once-per-view and its state is process-global, so a test that asserts
+    /// on the warning needs a name no other test has used.
+    async fn setup_named<Q>(type_name: &str) -> SurrealDBStorage<Article, Q> {
         let db = connect("mem://").await.unwrap();
         db.use_ns("test").use_db("test").await.unwrap();
         db.query("DEFINE TABLE IF NOT EXISTS articles SCHEMALESS")
@@ -413,7 +401,11 @@ mod tests {
             .unwrap()
             .check()
             .unwrap();
-        SurrealDBStorage::new(db, "article", "articles")
+        SurrealDBStorage::new(db, type_name, "articles")
+    }
+
+    async fn setup_for<Q>() -> SurrealDBStorage<Article, Q> {
+        setup_named("article").await
     }
 
     async fn setup() -> SurrealDBStorage<Article, ArticleQuery> {
@@ -581,5 +573,121 @@ mod tests {
         assert_eq!(result.page_size, 2);
         let scores: Vec<i32> = result.items.iter().map(|a| a.score).collect();
         assert_eq!(scores, vec![40, 50]);
+    }
+
+    // ── Sort field validation ────────────────────────────────────────────────
+
+    /// A query whose sort is whatever the caller asked for — the untrusted path.
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    struct SortedQuery(String);
+
+    impl Query for SortedQuery {
+        fn sort(&self) -> Option<Vec<Sorter>> {
+            Some(vec![Sorter {
+                field: self.0.clone(),
+                direction: crate::read::sorter::SortDirection::Asc,
+            }])
+        }
+    }
+
+    /// The clause is shared (`read::sorter::order_by_clause`); what is specific here is
+    /// that `DataPrefixMapper` runs *after* validation, so a dotted logical path stays
+    /// legal while the mapped output would never pass the validator itself.
+    #[test]
+    fn the_data_prefix_mapper_is_applied_after_validation() {
+        let sorters = vec![
+            Sorter {
+                field: "score".into(),
+                direction: crate::read::sorter::SortDirection::Asc,
+            },
+            Sorter {
+                field: "muscle.primary".into(),
+                direction: crate::read::sorter::SortDirection::Desc,
+            },
+        ];
+        assert_eq!(
+            order_by_clause(Some(sorters), &DataPrefixMapper).unwrap(),
+            " ORDER BY data.score ASC, data.muscle.primary DESC"
+        );
+    }
+
+    /// A query asking for a later page with no sort declared.
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    struct SecondPageQuery;
+
+    impl Query for SecondPageQuery {
+        fn pagination(&self) -> Option<Pagination> {
+            Some(Pagination {
+                skip: Some(2),
+                limit: Some(2),
+            })
+        }
+    }
+
+    /// Pins the warning into SurrealDB's `filter`, end-to-end on the in-memory engine:
+    /// delete the call in `surrealdb.rs` and this fails. The view name is its own,
+    /// because the warning is once-per-view and the state is process-global.
+    #[tokio::test]
+    async fn filter_warns_when_paging_without_a_sort() {
+        let store: SurrealDBStorage<Article, SecondPageQuery> =
+            setup_named("surreal_unsorted_view").await;
+        let ctx = CqrsContext::default();
+
+        let events = events_of_async(async {
+            store
+                .filter(None, SecondPageQuery, ctx.clone())
+                .await
+                .expect("the query itself still succeeds — only the order is undefined");
+        })
+        .await;
+
+        let ours = containing(&events, "no sort in effect");
+        assert_eq!(ours.len(), 1, "exactly one warning, got {events:?}");
+        assert!(ours[0].starts_with("WARN "), "{}", ours[0]);
+        assert!(
+            ours[0].contains("type_name=surreal_unsorted_view"),
+            "{}",
+            ours[0]
+        );
+        assert!(ours[0].contains("skip=2"), "{}", ours[0]);
+    }
+
+    /// End-to-end against the in-memory engine: the hostile field is rejected and no
+    /// query is run, rather than being interpolated into the SurrealQL string.
+    #[tokio::test]
+    async fn filter_rejects_a_hostile_sort_field() {
+        let store: SurrealDBStorage<Article, SortedQuery> = setup_for().await;
+        let ctx = CqrsContext::default();
+        store
+            .save(article("a1", "Hello", 42), ctx.clone())
+            .await
+            .unwrap();
+
+        let hostile = "1 UNION ALL SELECT data FROM secrets--";
+        let err = store
+            .filter(None, SortedQuery(hostile.to_string()), ctx.clone())
+            .await
+            .unwrap_err();
+        assert_eq!(err.code, "GENERIC_VALIDATION_FAILED");
+        assert!(err.message.contains(hostile));
+    }
+
+    #[tokio::test]
+    async fn filter_still_accepts_a_legitimate_sort_field() {
+        let store: SurrealDBStorage<Article, SortedQuery> = setup_for().await;
+        let ctx = CqrsContext::default();
+        for (id, score) in [("a1", 30), ("a2", 10), ("a3", 20)] {
+            store
+                .save(article(id, "item", score), ctx.clone())
+                .await
+                .unwrap();
+        }
+
+        let result = store
+            .filter(None, SortedQuery("score".to_string()), ctx)
+            .await
+            .unwrap();
+        let scores: Vec<i32> = result.items.iter().map(|a| a.score).collect();
+        assert_eq!(scores, vec![10, 20, 30]);
     }
 }

@@ -8,7 +8,7 @@ use axum::{middleware, Json, Router};
 use cqrs_rust_lib::dispatchers::ViewDispatcher;
 use cqrs_rust_lib::es::EventStoreImpl;
 use cqrs_rust_lib::prelude::surrealdb as db;
-use cqrs_rust_lib::rest::{CQRSAuditLogRouter, CQRSReadRouter, CQRSWriteRouter};
+use cqrs_rust_lib::rest::{CQRSAuditLogRouter, CQRSCodexReadRouter, CQRSWriteRouter, CqrsHttpQuery};
 use cqrs_rust_lib::{Aggregate, CqrsCommandEngine, CqrsContext, Dispatcher};
 use http::header::CONTENT_TYPE;
 use http::StatusCode;
@@ -104,12 +104,17 @@ pub async fn start(config: AppConfig) -> Result<(), Box<dyn std::error::Error + 
     let es_persist = db::EventStorePersist::<Game>::new(db.clone());
     let event_store = EventStoreImpl::new(es_persist);
 
-    // View storage (shared between read router and dispatcher)
-    let view_storage: Arc<db::ReadStorage<GameView, GameQuery>> =
+    // View storage (shared between read router and dispatcher).
+    //
+    // The query type is `CqrsHttpQuery<GameQuery>`, not `GameQuery`: that is what the
+    // Codex convention needs. With the plain `CQRSReadRouter` there is no `_q` param at
+    // all, so the fields `GameQuery` declares would bound nothing.
+    let view_storage: Arc<db::ReadStorage<GameView, CqrsHttpQuery<GameQuery>>> =
         Arc::new(db::ReadStorage::new(db.clone(), Game::TYPE, "game_view"));
 
     // Dispatcher: keeps GameView in sync with Game events
-    let view_dispatcher = ViewDispatcher::<Game, GameView, GameQuery>::new(view_storage.clone());
+    let view_dispatcher =
+        ViewDispatcher::<Game, GameView, CqrsHttpQuery<GameQuery>>::new(view_storage.clone());
 
     // CQRS engine
     let effects: Vec<Box<dyn Dispatcher<Game> + Send + Sync>> = vec![Box::new(view_dispatcher)];
@@ -123,7 +128,7 @@ pub async fn start(config: AppConfig) -> Result<(), Box<dyn std::error::Error + 
     ));
 
     // Routers
-    let read_router = CQRSReadRouter::routes(view_storage, Game::TYPE);
+    let read_router = CQRSCodexReadRouter::routes(view_storage, Game::TYPE);
     let write_router = CQRSWriteRouter::routes(engine);
     let audit_router = CQRSAuditLogRouter::routes(event_store, Game::TYPE);
 

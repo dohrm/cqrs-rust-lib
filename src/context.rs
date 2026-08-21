@@ -39,8 +39,54 @@ impl CqrsContext {
         Self { request_id, ..self }
     }
 
+    /// Replaces the whole metadata bag.
+    ///
+    /// Two callers each setting one key with this method means the second erases the
+    /// first. Use [`with_metadata_entry`](Self::with_metadata_entry) to add a key
+    /// without discarding what is already there.
     pub fn with_metadata(mut self, metadata: serde_json::Value) -> Self {
         self.metadata = Some(metadata);
+        self
+    }
+
+    /// Adds or replaces a single metadata key, keeping every other key.
+    ///
+    /// Reads are keyed — [`metadata`](Self::metadata) takes an `Option<&str>` — so
+    /// writes should be too. When the bag is absent, or holds something that is not a
+    /// JSON object, it is replaced by a fresh object holding just this entry: a scalar
+    /// has no key to preserve — the discard is logged at `warn`.
+    ///
+    /// The bag is visible to command handlers through [`metadata`](Self::metadata). It
+    /// is not persisted on the event envelope: `CQRSWriteRouter` forwards only
+    /// `user_id` and `request_id`.
+    ///
+    /// ```rust
+    /// use cqrs_rust_lib::CqrsContext;
+    /// use serde_json::json;
+    ///
+    /// let context = CqrsContext::default()
+    ///     .with_metadata_entry("tenant_id", json!("acme"))
+    ///     .with_metadata_entry("locale", json!("fr-CH"));
+    ///
+    /// assert_eq!(context.metadata(Some("tenant_id")), Some(json!("acme")));
+    /// assert_eq!(context.metadata(Some("locale")), Some(json!("fr-CH")));
+    /// ```
+    pub fn with_metadata_entry(mut self, key: impl Into<String>, value: serde_json::Value) -> Self {
+        let key_name = key.into();
+        let mut bag = match self.metadata.take() {
+            Some(serde_json::Value::Object(bag)) => bag,
+            Some(other) => {
+                tracing::warn!(
+                    discarded = %other,
+                    key = %key_name,
+                    "context metadata was not a JSON object; replacing it"
+                );
+                serde_json::Map::new()
+            }
+            None => serde_json::Map::new(),
+        };
+        bag.insert(key_name, value);
+        self.metadata = Some(serde_json::Value::Object(bag));
         self
     }
 
@@ -139,6 +185,7 @@ impl Default for CqrsContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn test_next_uuid() {
@@ -152,5 +199,81 @@ mod tests {
         let context = CqrsContext::default().with_rand_bytes([0; 16]);
         let uuid = context.next_uuid();
         assert_eq!(uuid, "00000000-0000-4000-8000-000000000000".to_string());
+    }
+
+    /// Two middlewares each writing one key, in whichever order they run: both
+    /// entries must survive.
+    #[test]
+    fn test_metadata_entries_accumulate() {
+        let context = CqrsContext::default()
+            .with_metadata_entry("tenant_id", json!("acme"))
+            .with_metadata_entry("locale", json!("fr-CH"));
+
+        assert_eq!(context.metadata(Some("tenant_id")), Some(json!("acme")));
+        assert_eq!(context.metadata(Some("locale")), Some(json!("fr-CH")));
+        assert_eq!(
+            context.metadata(None),
+            Some(json!({"tenant_id": "acme", "locale": "fr-CH"}))
+        );
+    }
+
+    #[test]
+    fn test_metadata_entry_preserves_an_existing_bag() {
+        let context = CqrsContext::default()
+            .with_metadata(json!({"tenant_id": "acme", "trace_id": "abc"}))
+            .with_metadata_entry("locale", json!("fr-CH"));
+
+        assert_eq!(
+            context.metadata(None),
+            Some(json!({"tenant_id": "acme", "trace_id": "abc", "locale": "fr-CH"}))
+        );
+    }
+
+    #[test]
+    fn test_metadata_entry_overwrites_only_its_own_key() {
+        let context = CqrsContext::default()
+            .with_metadata(json!({"tenant_id": "acme", "locale": "en-GB"}))
+            .with_metadata_entry("locale", json!("fr-CH"));
+
+        assert_eq!(
+            context.metadata(None),
+            Some(json!({"tenant_id": "acme", "locale": "fr-CH"}))
+        );
+    }
+
+    /// `with_metadata` still replaces — that is the distinction the two methods draw,
+    /// and it is what makes the choice visible at the call site.
+    #[test]
+    fn test_with_metadata_still_replaces_the_whole_bag() {
+        let context = CqrsContext::default()
+            .with_metadata_entry("tenant_id", json!("acme"))
+            .with_metadata(json!({"locale": "fr-CH"}));
+
+        assert_eq!(context.metadata(Some("tenant_id")), None);
+        assert_eq!(context.metadata(None), Some(json!({"locale": "fr-CH"})));
+    }
+
+    #[test]
+    fn test_metadata_entry_on_a_non_object_bag_starts_clean() {
+        for bag in [json!("a scalar"), json!(["an", "array"]), json!(null)] {
+            let context = CqrsContext::default()
+                .with_metadata(bag.clone())
+                .with_metadata_entry("locale", json!("fr-CH"));
+
+            assert_eq!(
+                context.metadata(None),
+                Some(json!({"locale": "fr-CH"})),
+                "a {bag} bag has no key to preserve"
+            );
+        }
+    }
+
+    #[test]
+    fn test_metadata_entry_on_an_absent_bag_starts_clean() {
+        let context = CqrsContext::default();
+        assert_eq!(context.metadata(None), None, "precondition: no bag yet");
+
+        let context = context.with_metadata_entry("locale", json!("fr-CH"));
+        assert_eq!(context.metadata(None), Some(json!({"locale": "fr-CH"})));
     }
 }

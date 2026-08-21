@@ -274,6 +274,31 @@ CQRSCodexReadRouter::<Game, GameView, GameQuery>::routes(storage, "games")
 
 Filter priority: `_q` (RSQL) AND `Q::filter()` — combined. Sort priority: HTTP `sort` → `Q::sort()` → `Q::default_sort()`.
 
+The typed params of `Q` and the RSQL `_q` string are **one set of filterable fields in two syntaxes** — RSQL exists because a flat `?field=value` cannot express `>=`, `=in=`, `or` or a range. So `_q` may only name fields of the query struct: a field not reachable as a query param has no reason to be reachable from `_q`. The set is derived from `Q`'s `Deserialize` impl, so there is no second list to keep in step and every filterable field is a typed OpenAPI parameter by construction. A field the struct does not declare is rejected with **422** naming it; a query struct with no fields offers no filter at all.
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize, IntoParams)]
+pub struct GameQuery {
+    pub category: Option<String>,
+    pub title: Option<String>,   // filterable, therefore a field
+}
+
+impl Query for GameQuery {
+    // Sorting gets its own list: ordering by a column of the view is reasonable
+    // where filtering on it is not, so there is nothing to derive it from. Empty
+    // (the default) means the view offers no sort at all.
+    fn sortable_fields(&self) -> Vec<&str> {
+        vec!["id", "title", "category"]
+    }
+}
+```
+
+Both constrain the caller, not `Query::default_sort()` — a view can order its own results while offering the caller no say. Note what this does and does not do: the fields are still returned in the response body, so it stops a listing being used as a *lookup by* an unoffered field — it does not hide it. See [ADR-0002](docs/adr/0002-declare-the-queryable-field-surface-on-the-view.md), [ADR-0003](docs/adr/0003-sorting-declares-its-own-field-list.md) and [`docs/migration_guide/queryable_fields.md`](docs/migration_guide/queryable_fields.md).
+
+A query parameter the extractor cannot read is rejected with **422 Unprocessable Entity**, not silently dropped: a `_q` that fails to parse (the response carries rest-sql's positioned error, caret included), and a `skip`/`limit`/`page`/`page_size` that is not a non-negative integer. An *empty* value — `?_q=&limit=10` — means the parameter is unset, not unreadable, and is accepted. See [`docs/migration_guide/codex_query_rejection.md`](docs/migration_guide/codex_query_rejection.md).
+
+A sort field name must be one or more `.`-separated segments matching `[A-Za-z_][A-Za-z0-9_]*` — the dot addresses a nested path on MongoDB and SurrealDB. The name is interpolated into the generated `ORDER BY`, never bound as a parameter, so anything else (a space, a quote, a hyphen, a non-ASCII letter) is rejected with **400 Validation failed** naming the field. The check runs in the storage layer, so it applies to a `Sorter` built in Rust and handed to `Storage::filter` just as much as to the HTTP `sort` param. A view whose stored keys do not fit that grammar needs a `FieldMapper` translating a legal logical name to it.
+
 Pagination accepts both vocabularies; `skip`/`limit` wins when both are present:
 
 | Params | Meaning |

@@ -9,7 +9,9 @@ use axum::{middleware, Json, Router};
 use cqrs_rust_lib::dispatchers::ViewDispatcher;
 use cqrs_rust_lib::es::EventStoreImpl;
 use cqrs_rust_lib::prelude::mongodb as db;
-use cqrs_rust_lib::rest::{CQRSAuditLogRouter, CQRSReadRouter, CQRSWriteRouter};
+use cqrs_rust_lib::rest::{
+    CQRSAuditLogRouter, CQRSCodexReadRouter, CQRSReadRouter, CQRSWriteRouter, CqrsHttpQuery,
+};
 use cqrs_rust_lib::{Aggregate, CqrsCommandEngine, CqrsContext, Dispatcher};
 use http::header::CONTENT_TYPE;
 use http::StatusCode;
@@ -113,11 +115,17 @@ pub async fn start(config: AppConfig) -> Result<(), Box<dyn std::error::Error + 
         )),
     ));
 
-    let movement_repository = Arc::new(db::ReadStorage::<Movement, MovementQuery>::new(
-        database.clone(),
-        "movements",
-        "movements_view",
-    ));
+    // `CqrsHttpQuery<MovementQuery>` gives this route `_q`, `sort` and pagination. The
+    // plain `CQRSReadRouter` has none of them, so the fields `MovementQuery` declares
+    // would bound nothing. MongoDB stores the view as the document itself, so the
+    // default `IdentityMapper` names real fields.
+    let movement_repository = Arc::new(
+        db::ReadStorage::<Movement, CqrsHttpQuery<MovementQuery>>::new(
+            database.clone(),
+            "movements",
+            "movements_view",
+        ),
+    );
     let movement_dispatcher = ViewDispatcher::new(movement_repository.clone());
 
     // CQRS Command
@@ -135,7 +143,7 @@ pub async fn start(config: AppConfig) -> Result<(), Box<dyn std::error::Error + 
 
     // Initialize routers
     let accounts_read_router = CQRSReadRouter::routes(account_repository, Account::TYPE);
-    let movements_read_router = CQRSReadRouter::routes(movement_repository, Account::TYPE);
+    let movements_read_router = CQRSCodexReadRouter::routes(movement_repository, Account::TYPE);
     let accounts_write_router = CQRSWriteRouter::routes(accounts_engine);
     let audit_router = CQRSAuditLogRouter::routes(accounts_event_store, Account::TYPE);
 

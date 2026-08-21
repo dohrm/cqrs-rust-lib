@@ -1,0 +1,29 @@
+# Mutation testing config — Tier 3 (`just mutate-diff`), never a git hook.
+# Adapted from .claude/kit/rust/mutants.toml. cargo-mutants reads this path by default.
+
+# The read backends live behind `postgres`, `mongodb` and `surrealdb`, and the REST
+# layer behind `rest`. Without this, cargo-mutants builds the default feature set, the
+# mutated code is cfg'd out, no test exercises it, and every mutant in those modules
+# comes back MISSED in "0s test" — noise that hides the real survivors. `just check`
+# runs `cargo test --workspace`, which unifies the examples' features and does compile
+# them; this is the mutation harness catching up with the gate it is meant to sharpen.
+all_features = true
+
+# Deliberately NOT `test_workspace = true`. cargo-mutants copies the tree into TMPDIR
+# and rebuilds it per mutant; /tmp here is a 16 GB tmpfs, and an all-features debug
+# build of the workspace — the three example binaries included — fills it, so every
+# mutant came back "unviable" on `ld terminated with signal 7 [Bus error]` behind a
+# `No space left`. Scoping to the mutated package is enough: the library's own tests
+# are what assert on library code.
+
+# No exclusions. A mutant that survives here is a missing assertion, and excluding one
+# that could be killed is the hard bypass rules/agent/autonomy.md forbids. Any entry
+# added below needs a one-line justification saying why the mutant is equivalent.
+exclude_re = []
+exclude_globs = []
+
+# A FLOOR on the auto-set per-mutant timeout, not a cap: cargo-mutants waits
+# max(this, baseline x multiplier). The baseline suite runs in ~2s, so without a floor
+# a momentarily loaded machine reports a spurious timeout as if it were a kill. What
+# actually stops a runaway mutant is the auto-set timeout, or `--timeout`.
+minimum_test_timeout = 30

@@ -155,6 +155,40 @@ impl Query for GameQuery {
 Use `default_sort()` (associated fn, no `&self`) for unconditional sort. Use `sort(&self)` only
 when the sort direction depends on query field values.
 
+#### Case D — The caller may choose the sort
+
+Under `CQRSCodexReadRouter` the HTTP `sort` param is refused unless the view declares what
+it sorts on. **The default is empty and means "no sort offered"**, so a view migrated
+without this has a dead `sort` parameter.
+
+```rust
+impl Query for GameQuery {
+    fn sortable_fields(&self) -> Vec<&str> {
+        vec!["id", "title", "category"]
+    }
+}
+```
+
+The list is the *whole* sortable set, not an addition to the struct's fields. It may name
+columns of the **view** that are not query fields — that is what it is for. It does not
+constrain `default_sort()`, so a view can order its own results while offering the caller
+nothing.
+
+#### What `_q` may name — not a choice
+
+`_q` is bounded by the query struct's own fields, derived from `Deserialize`. There is
+nothing to declare and nothing to opt into: a field is filterable **iff** it is a field of
+the struct. So if a caller needs to filter on something, **add it to the struct** — which
+also gives it a typed OpenAPI parameter. Two consequences when migrating:
+
+- A field named `_q`, `skip`, `limit`, `page`, `page_size`, `pageSize` or `sort` is
+  unreachable — the extractor eats it — and is dropped from both sets. Rename it.
+- `#[serde(flatten)]`, and a unit/newtype/tuple struct, derive **no** field at all, so
+  every `_q` is refused. Keep the fields plain and on the struct itself.
+- `#[serde(alias = "...")]` is **unsupported**: the alias is admitted into `_q` but not
+  canonicalised, so it reaches the storage as a column that does not exist. `rename` is
+  fine. Remove aliases from query structs.
+
 ### Step 4 — Write the migration
 
 **Query struct file** (e.g., `src/game/query.rs`):
@@ -233,6 +267,12 @@ Common compilation errors after migration:
 - Multi-condition `Ast::And` not accepted → use `Ast::try_and(vec![...])` instead
 - `Value::Int` type mismatch → cast explicitly: `Value::Int(n as i64)`
 - `default_sort` not found → it requires `Self: Sized`; don't call it through `dyn Query`
+- HTTP `sort` answers 422 for everything → the view declares no `sortable_fields()`; empty
+  is the default and means no sort is offered
+- HTTP `_q` answers 422 for a field that exists on the view → it is not a field of the
+  *query struct*; add it there
+- `_q` answers 422 for everything → the query struct uses `#[serde(flatten)]`, or is a
+  unit/newtype/tuple struct, so no field name can be derived from it
 
 ### Step 7 — Report
 
@@ -240,6 +280,9 @@ Summarize:
 - Files modified / deleted
 - Query structs that used auto-derivation (Case A) vs. manual override (Case B/C)
 - Whether `default_sort()` was introduced
+- Whether `sortable_fields()` was declared — and for any view served by
+  `CQRSCodexReadRouter` that was left without one, say so: its HTTP `sort` is now refused
+- Any field added to a query struct so that `_q` could keep naming it
 - `cargo build` and `cargo clippy` status
 
 ---

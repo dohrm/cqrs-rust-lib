@@ -139,9 +139,28 @@ cargo clippy --all-features --all-targets -- -D warnings    # lints
 cargo clippy --features rest -- -D warnings                 # legacy error path (no problem-json)
 ```
 
-Note: `cargo test --workspace` includes `bank`'s MongoDB integration test, which
-needs a server on `localhost:27017` (or `MONGODB_TEST_URI`) and otherwise fails
-after a 60s timeout.
+### Test databases
+
+The integration suites and the examples need real servers. `compose.yaml` starts one of
+each on a **shifted port**, so the throwaway test stack can never be confused with a
+database already running on the machine:
+
+```bash
+just db-up      # postgres :55432, mongodb :37017, surrealdb :18000 — waits for healthy
+just test-db    # the suites that need a server (todolist/postgres, bank/mongodb)
+just db-down    # stop and delete the data
+```
+
+Both suites **skip** when their variable (`PG_TEST_URI`, `MONGODB_TEST_URI`) is unset, so
+`just check` and `cargo test --workspace` stay green with nothing running.
+
+Two details that are load-bearing, not preferences:
+
+- The Mongo URI carries `?directConnection=true`. The event store opens a transaction,
+  which a standalone `mongod` refuses, so the container runs a single-node replica set —
+  and without `directConnection` the driver would re-dial the host the set announces.
+- `mongod` listens on `37017` *inside* the container too, so the announced `host:port` is
+  the same on both sides of the container boundary.
 
 ## Examples
 
@@ -149,9 +168,19 @@ after a 60s timeout.
 - `example/todolist/`: PostgreSQL, domain errors (prefix 20), TodoList aggregate, REST API + Swagger — uses `prelude::postgres as db`
 - `example/ludotheque/`: SurrealDB, Game aggregate, REST API — the only example with `problem-json` enabled (both error formats stay covered)
 
+## Decision Records
+
+- `docs/adr/0001-reject-malformed-codex-query-params.md`: a malformed `_q` or pagination param answers 422 instead of being dropped
+- `docs/adr/0002-declare-the-queryable-field-surface-on-the-view.md`: `_q` and the typed query params are the same set — the query struct's fields
+- `docs/adr/0003-sorting-declares-its-own-field-list.md`: `Query::sortable_fields()` — a view sorts on nothing until it declares a list
+
+All three are **Accepted**. An agent only ever writes `Proposed`; moving a status line is a human commit — see `.claude/rules/agent/decisions.md`.
+
 ## Migration Guides
 
 - `docs/migration_guide/split_aggregate.md`: Legacy single-trait -> Aggregate + CommandHandler
 - `docs/migration_guide/domain_errors.md`: std::io::Error -> CqrsError + domain error codes
 - `docs/migration_guide/wasm_compat.md`: WASM compatibility, feature restructuring, cqrs_async_trait! migration
 - `docs/migration_guide/problem_json.md`: legacy error body -> RFC 9457 problem+json
+- `docs/migration_guide/codex_query_rejection.md`: a malformed `_q` or pagination param answers 422 instead of being dropped
+- `docs/migration_guide/queryable_fields.md`: `_q` bounded by the query struct (breaking), `Query::sortable_fields()`, and the `Q: Query` bound on the extractor

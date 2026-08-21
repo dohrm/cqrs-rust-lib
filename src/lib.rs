@@ -54,5 +54,27 @@ pub mod dispatchers;
 
 pub mod prelude;
 pub use rest_sql as rsql;
+// Gated on its two callers, both of which are feature-gated.
+#[cfg(any(
+    feature = "rest",
+    feature = "postgres",
+    feature = "mongodb",
+    feature = "surrealdb"
+))]
+pub(crate) mod warn_once;
+
+// Test-only, and gated on the features that have something to log: an unused
+// `pub(crate)` module is `dead_code` under CI's narrower feature sets.
+#[cfg(all(
+    test,
+    any(
+        feature = "rest",
+        feature = "postgres",
+        feature = "mongodb",
+        feature = "surrealdb"
+    )
+))]
+pub(crate) mod log_capture;
+
 #[cfg(test)]
 pub mod testing;

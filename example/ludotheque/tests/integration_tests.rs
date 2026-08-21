@@ -251,6 +251,7 @@ mod integration_tests {
                 GameQuery {
                     category: None,
                     available: Some(true),
+                    title: None,
                 },
                 context.clone(),
             )
@@ -266,6 +267,7 @@ mod integration_tests {
                 GameQuery {
                     category: None,
                     available: Some(false),
+                    title: None,
                 },
                 context.clone(),
             )
@@ -281,6 +283,7 @@ mod integration_tests {
                 GameQuery {
                     category: Some("stratégie".into()),
                     available: None,
+                    title: None,
                 },
                 context.clone(),
             )
@@ -332,6 +335,7 @@ mod integration_tests {
                 GameQuery {
                     category: None,
                     available: None,
+                    title: None,
                 },
                 context.clone(),
             )

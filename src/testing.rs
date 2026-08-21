@@ -129,6 +129,7 @@ impl CommandHandler for TestAggregate {
 
 // Define a test view
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(ToSchema))]
 pub struct TestView {
     pub id: String,
     pub name: String,

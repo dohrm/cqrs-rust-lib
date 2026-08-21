@@ -1,3 +1,4 @@
+use crate::read::page_order::warn_if_page_order_undefined;
 use crate::read::query::{Pagination, Query};
 use crate::read::sorter::{SortDirection, Sorter};
 use crate::read::storage::{HasId, Storage, StorageError};
@@ -23,21 +24,29 @@ fn map_bson_error(e: mongodb::bson::error::Error) -> CqrsError {
     CqrsError::database_error(e)
 }
 
-fn sorters_to_mongo_sort(sort: Option<Vec<Sorter>>, mapper: &impl FieldMapper) -> Option<Document> {
+/// Compiles the sorters into a MongoDB sort document.
+///
+/// Fallible for the same reason as the SQL backends: a sort key is not a bound
+/// parameter, and a `$`-prefixed or dotted key is meaningful to the driver, so
+/// [`Sorter::validated_field`] gates every field name.
+fn sorters_to_mongo_sort(
+    sort: Option<Vec<Sorter>>,
+    mapper: &impl FieldMapper,
+) -> Result<Option<Document>, CqrsError> {
     let sorters = match sort {
         Some(s) if !s.is_empty() => s,
-        _ => return None,
+        _ => return Ok(None),
     };
     let mut doc = Document::new();
     for s in &sorters {
-        let field = mapper.map(&s.field).into_owned();
+        let field = mapper.map(s.validated_field()?).into_owned();
         let dir: i32 = match s.direction {
             SortDirection::Asc => 1,
             SortDirection::Desc => -1,
         };
         doc.insert(field, Bson::Int32(dir));
     }
-    Some(doc)
+    Ok(Some(doc))
 }
 
 #[derive(Debug, Clone)]
@@ -116,18 +125,25 @@ where
     ) -> Result<Paged<V>, CqrsError> {
         let collection = self.database.collection::<V>(&self.collection_name);
 
+        // `map_err(...)?`, not `unwrap_or_default()`: an empty `Document` matches
+        // *everything*, so a filter that parsed but failed to compile used to return the
+        // whole collection with a 200 and nothing saying the filter had been dropped —
+        // the same fail-open shape ADR-0001 closes at the HTTP boundary, one layer down.
+        // Postgres and SurrealDB already propagate this error; MongoDB was the outlier.
         let user_filter = match query.filter() {
             Some(rsql) => MongoCompiler::new(self.mapper.clone())
                 .compile(&rsql)
-                .unwrap_or_default(),
+                .map_err(|e| CqrsError::internal(e.to_string()))?,
             None => Document::new(),
         };
         let filter_doc = self.parent_id_query(user_filter, &parent_id)?;
-        let sort_doc = sorters_to_mongo_sort(query.sort(), &self.mapper);
-
         let Pagination { skip, limit } = query.pagination().unwrap_or_default();
-        let skip_v = skip.unwrap_or(0).max(0) as u64;
+        let skip_v = skip.unwrap_or(0).max(0);
         let limit_v = limit.unwrap_or(20);
+
+        let sort = query.sort();
+        warn_if_page_order_undefined(&self.type_name, skip_v, sort.as_deref());
+        let sort_doc = sorters_to_mongo_sort(sort, &self.mapper)?;
 
         let total = collection
             .count_documents(filter_doc.clone())
@@ -136,7 +152,7 @@ where
 
         let find = collection
             .find(filter_doc.clone())
-            .skip(skip_v)
+            .skip(skip_v as u64)
             .limit(limit_v);
         let cursor = (if let Some(sort) = sort_doc {
             find.sort(sort)
@@ -147,7 +163,7 @@ where
         .map_err(map_mongo_error)?;
 
         let items = cursor.try_collect().await.map_err(map_mongo_error)?;
-        Ok(Paged::new(items, total as i64, skip_v as i64, limit_v))
+        Ok(Paged::new(items, total as i64, skip_v, limit_v))
     }
 
     async fn find_by_id(
@@ -261,4 +277,170 @@ where
         )))
     }
 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::log_capture::{containing, events_of_async};
+    use serde::Deserialize;
+
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    struct Article {
+        id: String,
+    }
+
+    impl HasId for Article {
+        fn field_id() -> &'static str {
+            "id"
+        }
+        fn id(&self) -> &str {
+            &self.id
+        }
+        fn parent_field_id() -> Option<&'static str> {
+            None
+        }
+        fn parent_id(&self) -> Option<&str> {
+            None
+        }
+    }
+
+    fn asc(field: &str) -> Sorter {
+        Sorter {
+            field: field.to_string(),
+            direction: SortDirection::Asc,
+        }
+    }
+
+    /// No server needed: the sort document is built before the driver is reached.
+    #[test]
+    fn a_valid_sort_compiles_to_the_expected_document() {
+        let sorters = vec![
+            asc("score"),
+            Sorter {
+                field: "muscle.primary".into(),
+                direction: SortDirection::Desc,
+            },
+        ];
+        assert_eq!(
+            sorters_to_mongo_sort(Some(sorters), &IdentityMapper).unwrap(),
+            Some(doc! { "score": 1i32, "muscle.primary": -1i32 })
+        );
+    }
+
+    #[test]
+    fn no_sort_compiles_to_no_document() {
+        assert_eq!(
+            sorters_to_mongo_sort(None, &IdentityMapper).unwrap(),
+            None,
+            "no sort must stay no sort, not an empty document"
+        );
+        assert_eq!(
+            sorters_to_mongo_sort(Some(vec![]), &IdentityMapper).unwrap(),
+            None
+        );
+    }
+
+    /// A sort key is not a bound parameter here either: it is a document key the
+    /// driver interprets, so the same validation applies as on the SQL backends.
+    #[test]
+    fn a_hostile_sort_field_is_rejected() {
+        let hostile = "1 UNION ALL SELECT data FROM secrets--";
+        let err = sorters_to_mongo_sort(Some(vec![asc(hostile)]), &IdentityMapper).unwrap_err();
+        assert_eq!(err.code, "GENERIC_VALIDATION_FAILED");
+        assert!(err.message.contains(hostile));
+    }
+
+    #[test]
+    fn an_operator_prefixed_sort_field_is_rejected() {
+        let err = sorters_to_mongo_sort(Some(vec![asc("$natural")]), &IdentityMapper).unwrap_err();
+        assert_eq!(err.code, "GENERIC_VALIDATION_FAILED");
+        assert!(err.message.contains("$natural"));
+    }
+
+    /// A storage pointed at a server that is not there. `Client::with_uri_str` does no
+    /// I/O — it only parses the URI and starts a background topology monitor — so
+    /// `filter` reaches the warning and then fails on the first command. That is enough
+    /// to pin the call: delete it in `filter` and this test fails, with no server.
+    async fn unreachable_storage<Q>(type_name: &str) -> MongoDbStorage<Article, Q> {
+        let client = mongodb::Client::with_uri_str(
+            "mongodb://127.0.0.1:1/?serverSelectionTimeoutMS=50&connectTimeoutMS=50",
+        )
+        .await
+        .expect("the URI parses; nothing connects yet");
+        MongoDbStorage::new(client.database("test"), type_name, "articles")
+    }
+
+    /// A query asking for a later page with no sort declared.
+    #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+    struct SecondPageQuery;
+
+    impl Query for SecondPageQuery {
+        fn pagination(&self) -> Option<Pagination> {
+            Some(Pagination {
+                skip: Some(20),
+                limit: Some(20),
+            })
+        }
+    }
+
+    /// A `_q` that parses but does not compile used to become `Document::new()` — which
+    /// matches every document — so the caller received the whole collection with a `200`
+    /// and no sign the filter had been dropped. `Like` against a non-string is the case
+    /// rest-sql-drivers rejects, and it now surfaces as an error like it does on the
+    /// other two backends.
+    #[tokio::test]
+    async fn a_filter_that_fails_to_compile_is_an_error_not_an_empty_document() {
+        use rest_sql::{Ast, Constraint, Operator, RestSql, Value};
+
+        #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+        struct UncompilableQuery;
+
+        impl Query for UncompilableQuery {
+            fn filter(&self) -> Option<RestSql> {
+                // Parses and validates; the MongoDB compiler rejects it.
+                RestSql::from_ast(Ast::Constraint(Constraint {
+                    field: "title".into(),
+                    operator: Operator::Like,
+                    value: Value::Int(1),
+                }))
+                .ok()
+            }
+        }
+
+        let storage = unreachable_storage::<UncompilableQuery>("mongo_uncompilable").await;
+        let err = storage
+            .filter(None, UncompilableQuery, CqrsContext::default())
+            .await
+            .expect_err("an uncompilable filter must not silently match everything");
+
+        assert!(
+            err.message.to_lowercase().contains("like"),
+            "the error must say which operator it could not compile, got: {}",
+            err.message
+        );
+    }
+
+    #[tokio::test]
+    async fn filter_warns_when_paging_without_a_sort() {
+        // A view name of its own: the warning is once-per-view and process-global.
+        let storage = unreachable_storage::<SecondPageQuery>("mongo_unsorted_view").await;
+
+        let events = events_of_async(async {
+            let _ = storage
+                .filter(None, SecondPageQuery, CqrsContext::default())
+                .await;
+        })
+        .await;
+
+        let ours = containing(&events, "no sort in effect");
+        assert_eq!(ours.len(), 1, "exactly one warning, got {events:?}");
+        assert!(ours[0].starts_with("WARN "), "{}", ours[0]);
+        assert!(
+            ours[0].contains("type_name=mongo_unsorted_view"),
+            "{}",
+            ours[0]
+        );
+        assert!(ours[0].contains("skip=20"), "{}", ours[0]);
+    }
 }

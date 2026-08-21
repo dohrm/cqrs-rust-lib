@@ -45,8 +45,11 @@ tokio-postgres = { version = "^0.7", optional = true, features = ["with-serde_js
 # SurrealDB for surrealdb feature
 surrealdb = { version = "^3.2", optional = true }
 surrealdb-types = { version = "^3.2", optional = true }
-# rest-sql: always present (WASM-compatible, lightweight RSQL parser)
-rest-sql = { version = "0.4" }
+# rest-sql: always present (WASM-compatible, lightweight RSQL parser).
+# `serde` is not a new dependency — it enables `rest_sql::dsl::serde_fields::<T>()`, which
+# reads a type's field names off its Deserialize impl. That is what lets `_q` be checked
+# against the query struct instead of a hand-maintained list of strings.
+rest-sql = { version = "0.4", features = ["serde"] }
 rest-sql-drivers = { version = "0.4", optional = true }
 serde_urlencoded = { version = "0.7", optional = true }
 percent-encoding = { version = "2", optional = true }
