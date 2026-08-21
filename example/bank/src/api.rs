@@ -107,12 +107,12 @@ pub async fn start(config: AppConfig) -> Result<(), Box<dyn std::error::Error + 
     // Storages
     let account_es_store = db::EventStorePersist::<Account>::new(database.clone());
 
+    // Reads the event store's snapshot collection directly. The default mapper points a
+    // filter at `state.field`, where the aggregate actually sits inside the stored
+    // `Snapshot` document — with the identity mapper it matched nothing, silently (#10).
     let account_repository = Arc::new(db::FromSnapshotStorage::<Account, AccountQuery>::new(
-        Arc::new(db::ReadStorage::new(
-            database.clone(),
-            "accounts",
-            account_es_store.snapshot_collection_name(),
-        )),
+        database.clone(),
+        account_es_store.snapshot_collection_name(),
     ));
 
     // `CqrsHttpQuery<MovementQuery>` gives this route `_q`, `sort` and pagination. The

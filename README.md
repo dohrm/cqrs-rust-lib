@@ -207,7 +207,11 @@ use cqrs_rust_lib::prelude::postgres as db;
 // Everything below stays the same:
 let es = db::EventStorePersist::<MyAggregate>::new(connection.clone());
 let repo = Arc::new(db::ReadStorage::<MyView, MyQuery>::new(connection.clone(), "my_view", ...));
-let snap = Arc::new(db::FromSnapshotStorage::<MyAggregate, MyQuery>::new(Arc::clone(&repo)));
+// Reads the event store's own snapshot table, so it takes the table, not a view storage.
+let snap = Arc::new(db::FromSnapshotStorage::<MyAggregate, MyQuery>::new(
+    connection.clone(),
+    es.snapshot_table_name(),
+));
 ```
 
 | Alias                | inmemory | postgres | mongodb | surrealdb |
@@ -217,6 +221,8 @@ let snap = Arc::new(db::FromSnapshotStorage::<MyAggregate, MyQuery>::new(Arc::cl
 | `FromSnapshotStorage`| —        | ✓        | ✓       | ✓         |
 
 The connection setup (client, pool, URI) is necessarily backend-specific and stays outside the prelude.
+
+`FromSnapshotStorage` reads the event store's snapshot table directly — its layout differs from a view table on every backend — and defaults to a mapper naming where the aggregate actually sits: `data->>'field'` on Postgres, `data.field` on SurrealDB, `state.field` on MongoDB. See [`docs/migration_guide/snapshot_read_storage.md`](docs/migration_guide/snapshot_read_storage.md).
 
 ## Query Trait (Read Side)
 

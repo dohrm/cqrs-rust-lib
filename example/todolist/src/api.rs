@@ -102,12 +102,12 @@ pub async fn start(config: AppConfig) -> Result<(), Box<dyn std::error::Error + 
 
     // Storages
     let es_store = db::EventStorePersist::<TodoList>::from_client(client.clone());
+    // Reads the event store's snapshot table directly. It takes the table, not a wrapped
+    // view storage: the two have different schemas, which is what made this route
+    // unreadable before (#10). The default mapper points a filter at `data->>'field'`.
     let repository = Arc::new(db::FromSnapshotStorage::<TodoList, TodoListQuery>::new(
-        Arc::new(db::ReadStorage::new(
-            client.clone(),
-            TodoList::TYPE,
-            es_store.snapshot_table_name(),
-        )),
+        client.clone(),
+        es_store.snapshot_table_name(),
     ));
 
     // CQRS Command

@@ -119,7 +119,12 @@ db-down:
     podman compose -f compose.yaml down -v
 
 # The suites that need a server. Everything else already runs under `just check`.
+#
+# The first line is the root package's own integration tests — `tests/snapshot_read_path.rs`
+# among them. Without it those files return at their first line under every recipe in this
+# justfile, which is not a passing test, it is an absent one.
 test-db:
+    cd {{rust_dir}} && PG_TEST_URI="{{pg_test_uri}}" MONGODB_TEST_URI="{{mongo_test_uri}}" cargo test --all-features
     cd {{rust_dir}} && PG_TEST_URI="{{pg_test_uri}}" cargo test -p todolist
     cd {{rust_dir}} && MONGODB_TEST_URI="{{mongo_test_uri}}" cargo test -p bank
 
