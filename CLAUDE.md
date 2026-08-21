@@ -99,6 +99,12 @@ use cqrs_rust_lib::prelude::postgres as db;  // or mongodb, surrealdb, inmemory
 
 The `QueryBuilder` trait is backend-specific (SQL params vs BSON vs SurrealQL) — it must be reimplemented when swapping backends. Original concrete names (`PostgresPersist`, `MongoDbStorage`, etc.) remain available from their respective modules.
 
+`FromSnapshotStorage` takes the snapshot table/collection, not a wrapped `ReadStorage`:
+`FromSnapshotStorage::<A, Q>::new(client_or_db, es.snapshot_table_name())`. It reads the
+event store's own table, whose layout differs from a view table on every backend, and its
+default mapper points a filter at where the aggregate actually sits — `data->>'field'` on
+Postgres, `data.field` on SurrealDB, `state.field` on MongoDB.
+
 ### Feature Flags
 
 - `utoipa`: ToSchema/IntoParams derives only (WASM-compatible)
@@ -183,4 +189,5 @@ All three are **Accepted**. An agent only ever writes `Proposed`; moving a statu
 - `docs/migration_guide/wasm_compat.md`: WASM compatibility, feature restructuring, cqrs_async_trait! migration
 - `docs/migration_guide/problem_json.md`: legacy error body -> RFC 9457 problem+json
 - `docs/migration_guide/codex_query_rejection.md`: a malformed `_q` or pagination param answers 422 instead of being dropped
+- `docs/migration_guide/snapshot_read_storage.md`: `FromSnapshotStorage` takes the snapshot table; its default mapper points at where the aggregate sits
 - `docs/migration_guide/queryable_fields.md`: `_q` bounded by the query struct (breaking), `Query::sortable_fields()`, and the `Q: Query` bound on the extractor

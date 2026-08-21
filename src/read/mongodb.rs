@@ -8,6 +8,7 @@ use futures::TryStreamExt;
 use mongodb::bson::{doc, serialize_to_document, Bson, Document};
 use mongodb::Database;
 use rest_sql::{FieldMapper, IdentityMapper};
+use std::borrow::Cow;
 use rest_sql_drivers::mongodb::MongoCompiler;
 use rest_sql_drivers::Driver;
 use serde::de::DeserializeOwned;
@@ -197,8 +198,34 @@ where
 }
 }
 
+/// Maps a logical field name onto its place inside a snapshot document.
+///
+/// The snapshot collection stores a whole `Snapshot<A>` — `{_id, state: {…}, version}` —
+/// so a filter on `name` has to reach `state.name`. With the default [`IdentityMapper`]
+/// it reached `name`, which no document has: the query matched nothing and returned an
+/// empty page with `total: 0` and no error at all. See #10.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SnapshotStateMapper;
+
+impl FieldMapper for SnapshotStateMapper {
+    fn map<'a>(&self, field: &'a str) -> Cow<'a, str> {
+        Cow::Owned(format!("state.{field}"))
+    }
+}
+
+/// Rejected when a caller hands a snapshot storage a parent id. Same wording as the
+/// other backends.
+const NO_PARENT_ON_SNAPSHOT: &str =
+    "a snapshot table has no parent column, so a parent id cannot be filtered on";
+
+/// Read-side storage over the event store's **snapshot** collection.
+///
+/// Unlike the Postgres and SurrealDB ones, this does reuse [`MongoDbStorage`]: the
+/// snapshot document *is* a serialized `Snapshot<A>`, so reading it as one is correct.
+/// What was wrong is the mapper — see [`SnapshotStateMapper`]. Writing stays unsupported:
+/// the event store owns this collection.
 #[derive(Debug, Clone)]
-pub struct MongoDBFromSnapshotStorage<A, Q, M = IdentityMapper>
+pub struct MongoDBFromSnapshotStorage<A, Q, M = SnapshotStateMapper>
 where
     A: Aggregate,
     Q: Debug + Clone + Send + Sync + Query,
@@ -208,17 +235,15 @@ where
     inner: Arc<MongoDbStorage<Snapshot<A>, Q, M>>,
 }
 
-impl<A, Q> MongoDBFromSnapshotStorage<A, Q, IdentityMapper>
+impl<A, Q> MongoDBFromSnapshotStorage<A, Q, SnapshotStateMapper>
 where
     A: Aggregate,
     Q: Debug + Clone + Send + Sync + Query,
 {
+    /// `snapshot_collection` is what `MongoDBPersist::snapshot_collection_name()` returns.
     #[must_use]
-    pub fn new(inner: Arc<MongoDbStorage<Snapshot<A>, Q, IdentityMapper>>) -> Self {
-        Self {
-            _phantom: PhantomData,
-            inner,
-        }
+    pub fn new(database: Database, snapshot_collection: &str) -> Self {
+        Self::with_mapper(database, snapshot_collection, SnapshotStateMapper)
     }
 }
 
@@ -229,10 +254,15 @@ where
     M: FieldMapper + Debug + Clone + Send + Sync,
 {
     #[must_use]
-    pub fn with_mapper(inner: Arc<MongoDbStorage<Snapshot<A>, Q, M>>) -> Self {
+    pub fn with_mapper(database: Database, snapshot_collection: &str, mapper: M) -> Self {
         Self {
             _phantom: PhantomData,
-            inner,
+            inner: Arc::new(MongoDbStorage::with_mapper(
+                database,
+                A::TYPE,
+                snapshot_collection,
+                mapper,
+            )),
         }
     }
 }
@@ -254,6 +284,9 @@ where
         query: Q,
         context: CqrsContext,
     ) -> Result<Paged<A>, CqrsError> {
+        if parent_id.is_some() {
+            return Err(CqrsError::validation(NO_PARENT_ON_SNAPSHOT));
+        }
         let result = self.inner.filter(parent_id, query, context).await?;
         Ok(result.map(|s| s.state))
     }
@@ -264,6 +297,9 @@ where
         id: &str,
         context: CqrsContext,
     ) -> Result<Option<A>, CqrsError> {
+        if parent_id.is_some() {
+            return Err(CqrsError::validation(NO_PARENT_ON_SNAPSHOT));
+        }
         Ok(self
             .inner
             .find_by_id(parent_id, id, context)
@@ -310,6 +346,14 @@ mod tests {
             field: field.to_string(),
             direction: SortDirection::Asc,
         }
+    }
+
+    /// Pure, and therefore reachable by `cargo mutants`: the integration test skips
+    /// without a server and asserts nothing under mutation.
+    #[test]
+    fn the_snapshot_mapper_addresses_the_state_subdocument() {
+        assert_eq!(SnapshotStateMapper.map("name"), "state.name");
+        assert_eq!(SnapshotStateMapper.map("counter"), "state.counter");
     }
 
     /// No server needed: the sort document is built before the driver is reached.

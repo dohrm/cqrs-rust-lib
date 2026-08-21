@@ -3,7 +3,7 @@ use crate::read::query::{Pagination, Query};
 use crate::read::sorter::order_by_clause;
 use crate::read::storage::{HasId, Storage, StorageError};
 use crate::read::Paged;
-use crate::{Aggregate, CqrsContext, CqrsError, Snapshot};
+use crate::{Aggregate, CqrsContext, CqrsError};
 use rest_sql::FieldMapper;
 use rest_sql_drivers::surrealdb::SurrealCompiler;
 use rest_sql_drivers::Driver;
@@ -13,7 +13,6 @@ use serde_json::Value as JsonValue;
 use std::borrow::Cow;
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::sync::Arc;
 use surrealdb::engine::any::Any;
 use surrealdb::Surreal;
 use surrealdb_types::SurrealValue;
@@ -238,44 +237,45 @@ where
 }
 }
 
-/// Wraps `SurrealDBStorage<Snapshot<A>, Q, M>` and exposes `Storage<A, Q>`, projecting snapshots
-/// to their inner state on read. `save` is intentionally unsupported.
+const NO_PARENT_ON_SNAPSHOT: &str =
+    "a snapshot table has no parent column, so a parent id cannot be filtered on";
+
+/// Read-side storage over the event store's **snapshot** table.
+///
+/// This does not reuse [`SurrealDBStorage`], for the same reason as the Postgres one: the
+/// snapshot row stores the **bare aggregate** under `data`, while the view storage
+/// deserializes that field into its `V`. Pointing it at `Snapshot<A>` asked for a shape
+/// nobody wrote, and every read failed with `missing field \`_id\``. See #10.
+///
+/// The row layout does line up otherwise — the record id is the aggregate id, and
+/// `DataPrefixMapper` already maps a logical name onto `data.field`, which is where the
+/// aggregate's own fields live. So the queries here are the view storage's, with `data`
+/// read as an `A` and no parent column. Writing stays unsupported: the event store owns
+/// this table.
 #[derive(Debug, Clone)]
-pub struct SurrealDBFromSnapshotStorage<A, Q, M = DataPrefixMapper>
-where
-    A: Aggregate,
-    Q: Debug + Clone + Send + Sync + Query,
-    M: FieldMapper + Debug + Clone + Send + Sync,
-{
-    _phantom: PhantomData<A>,
-    inner: Arc<SurrealDBStorage<Snapshot<A>, Q, M>>,
+pub struct SurrealDBFromSnapshotStorage<A, Q, M = DataPrefixMapper> {
+    _phantom: PhantomData<(A, Q)>,
+    db: Surreal<Any>,
+    snapshot_table: String,
+    mapper: M,
 }
 
-impl<A, Q> SurrealDBFromSnapshotStorage<A, Q, DataPrefixMapper>
-where
-    A: Aggregate,
-    Q: Debug + Clone + Send + Sync + Query,
-{
+impl<A, Q> SurrealDBFromSnapshotStorage<A, Q, DataPrefixMapper> {
+    /// `snapshot_table` is what `SurrealDBPersist::snapshot_table_name()` returns.
     #[must_use]
-    pub fn new(inner: Arc<SurrealDBStorage<Snapshot<A>, Q, DataPrefixMapper>>) -> Self {
-        Self {
-            _phantom: PhantomData,
-            inner,
-        }
+    pub fn new(db: Surreal<Any>, snapshot_table: &str) -> Self {
+        Self::with_mapper(db, snapshot_table, DataPrefixMapper)
     }
 }
 
-impl<A, Q, M> SurrealDBFromSnapshotStorage<A, Q, M>
-where
-    A: Aggregate,
-    Q: Debug + Clone + Send + Sync + Query,
-    M: FieldMapper + Debug + Clone + Send + Sync,
-{
+impl<A, Q, M> SurrealDBFromSnapshotStorage<A, Q, M> {
     #[must_use]
-    pub fn with_mapper(inner: Arc<SurrealDBStorage<Snapshot<A>, Q, M>>) -> Self {
+    pub fn with_mapper(db: Surreal<Any>, snapshot_table: &str, mapper: M) -> Self {
         Self {
             _phantom: PhantomData,
-            inner,
+            db,
+            snapshot_table: snapshot_table.to_string(),
+            mapper,
         }
     }
 }
@@ -295,35 +295,101 @@ where
         &self,
         parent_id: Option<String>,
         query: Q,
-        context: CqrsContext,
+        _context: CqrsContext,
     ) -> Result<Paged<A>, CqrsError> {
-        let result = self.inner.filter(parent_id, query, context).await?;
-        Ok(result.map(|s| s.state))
+        if parent_id.is_some() {
+            return Err(CqrsError::validation(NO_PARENT_ON_SNAPSHOT));
+        }
+
+        let where_clause = match query.filter() {
+            Some(rsql) => {
+                let compiled = SurrealCompiler::new(self.mapper.clone())
+                    .compile(&rsql)
+                    .map_err(|e| CqrsError::internal(e.to_string()))?;
+                format!("WHERE {}", compiled)
+            }
+            None => String::new(),
+        };
+
+        let Pagination { skip, limit } = query.pagination().unwrap_or_default();
+        let limit_v = limit.unwrap_or(20).max(0);
+        let offset_v = skip.unwrap_or(0).max(0);
+
+        let sort = query.sort();
+        warn_if_page_order_undefined(A::TYPE, offset_v, sort.as_deref());
+        let order_by = order_by_clause(sort, &self.mapper)?;
+
+        let count_sql = format!(
+            "SELECT count() AS cnt FROM {} {} GROUP ALL",
+            self.snapshot_table, where_clause
+        );
+        let mut r = self.db.query(count_sql).await.map_err(map_surreal_error)?;
+        let counts: Vec<CountRow> = r.take(0).map_err(map_surreal_error)?;
+        let total = counts.first().map(|c| c.cnt).unwrap_or(0);
+
+        // SELECT * so fields referenced in ORDER BY are projected (SurrealDB v3).
+        let select_sql = format!(
+            "SELECT * FROM {} {}{} LIMIT $__cqrs_limit START $__cqrs_offset",
+            self.snapshot_table, where_clause, order_by
+        );
+        let mut result = self
+            .db
+            .query(select_sql)
+            .bind(("__cqrs_limit", limit_v))
+            .bind(("__cqrs_offset", offset_v))
+            .await
+            .map_err(map_surreal_error)?;
+        let rows: Vec<DataRow> = result.take(0).map_err(map_surreal_error)?;
+
+        let mut items: Vec<A> = Vec::with_capacity(rows.len());
+        for row in rows {
+            // `data` is the aggregate itself, not a `Snapshot` wrapper.
+            items.push(serde_json::from_value(row.data).map_err(CqrsError::serialization_error)?);
+        }
+        Ok(Paged::new(items, total, offset_v, limit_v))
     }
 
     async fn find_by_id(
         &self,
         parent_id: Option<String>,
         id: &str,
-        context: CqrsContext,
+        _context: CqrsContext,
     ) -> Result<Option<A>, CqrsError> {
-        Ok(self
-            .inner
-            .find_by_id(parent_id, id, context)
-            .await?
-            .map(|s| s.state))
+        if parent_id.is_some() {
+            return Err(CqrsError::validation(NO_PARENT_ON_SNAPSHOT));
+        }
+
+        // The snapshot's record id *is* the aggregate id — `save_snapshot` upserts
+        // `type::record($table, $aggregate_id)`.
+        let sql = format!(
+            "SELECT data FROM {} WHERE id = type::record($__cqrs_table, $__cqrs_id)",
+            self.snapshot_table
+        );
+        let mut result = self
+            .db
+            .query(sql)
+            .bind(("__cqrs_table", self.snapshot_table.clone()))
+            .bind(("__cqrs_id", id.to_string()))
+            .await
+            .map_err(map_surreal_error)?;
+        let rows: Vec<DataRow> = result.take(0).map_err(map_surreal_error)?;
+
+        match rows.into_iter().next() {
+            Some(row) => Ok(Some(
+                serde_json::from_value(row.data).map_err(CqrsError::serialization_error)?,
+            )),
+            None => Ok(None),
+        }
     }
 
     async fn save(&self, _entity: A, _context: CqrsContext) -> Result<(), CqrsError> {
-        Err(CqrsError::internal(
-            StorageError::UnsupportedMethod("SurrealDBFromSnapshotStorage#save".to_string())
-                .to_string(),
-        ))
+        Err(CqrsError::database_error(StorageError::UnsupportedMethod(
+            "SnapshotStorage#save".to_string(),
+        )))
     }
 }
 }
 
-// ─── Tests ───────────────────────────────────────────────────────────────────
 #[cfg(test)]
 mod tests {
     use super::*;

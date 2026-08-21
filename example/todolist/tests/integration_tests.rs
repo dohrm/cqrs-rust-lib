@@ -123,14 +123,84 @@ mod integration_tests {
 
     #[tokio::test]
     async fn test_postgres_event_store() {
-        if let Some(client) = setup_pg().await {
-            let store = cqrs_rust_lib::prelude::postgres::EventStorePersist::<TodoList>::new(
-                Arc::new(client),
-            );
-            testcases(store).await;
-        } else {
+        let Some(client) = setup_pg().await else {
             eprintln!("PG_TEST_URI not set or connection failed — skipping Postgres test");
-        }
+            return;
+        };
+        let client = Arc::new(client);
+        let store =
+            cqrs_rust_lib::prelude::postgres::EventStorePersist::<TodoList>::new(client.clone());
+        testcases(store).await;
+
+        // Same test, not a separate one: `setup_pg` drops and recreates the tables, so a
+        // second Postgres test running concurrently would pull them out from under this.
+        read_route_reads_what_the_event_store_wrote(client).await;
+    }
+
+    /// The read route #10 was about. An aggregate written through the event store's own
+    /// API, then read back through the snapshot storage the API wires — the two disagreed
+    /// on the row shape, so both reads answered 500 before the fix.
+    async fn read_route_reads_what_the_event_store_wrote(client: Arc<tokio_postgres::Client>) {
+        use cqrs_rust_lib::prelude::postgres as db;
+        use cqrs_rust_lib::read::storage::Storage;
+        use cqrs_rust_lib::CqrsContext;
+        use todolist::todolist::query::TodoListQuery;
+
+        let es = db::EventStorePersist::<TodoList>::from_client(client.clone());
+        let mut session = es.start_session().await.expect("session");
+        es.save_snapshot(
+            &TodoList {
+                id: "t1".to_string(),
+                name: "groceries".to_string(),
+                todos: vec![],
+            },
+            1,
+            &mut session,
+        )
+        .await
+        .expect("save_snapshot");
+        es.close_session(session).await.expect("commit");
+
+        let storage = db::FromSnapshotStorage::<TodoList, TodoListQuery>::new(
+            client,
+            es.snapshot_table_name(),
+        );
+        let ctx = CqrsContext::default();
+
+        let found = storage
+            .find_by_id(None, "t1", ctx.clone())
+            .await
+            .expect("find_by_id must not error");
+        assert_eq!(found.map(|t| t.name), Some("groceries".to_string()));
+
+        // `testcases` above left its own snapshot behind, so assert on this row rather
+        // than on the count.
+        let page = storage
+            .filter(None, TodoListQuery { name: None }, ctx.clone())
+            .await
+            .expect("filter must not error");
+        assert!(
+            page.items.iter().any(|t| t.id == "t1"),
+            "the unfiltered page must contain the row just written, got {:?}",
+            page.items.iter().map(|t| &t.id).collect::<Vec<_>>()
+        );
+
+        // And a declared filter reaches `data->>'name'`, where the aggregate's field is.
+        let page = storage
+            .filter(
+                None,
+                TodoListQuery {
+                    name: Some("groceries".to_string()),
+                },
+                ctx,
+            )
+            .await
+            .expect("filter by name");
+        assert_eq!(
+            page.items.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            vec!["t1"],
+            "the filter must match exactly the row whose name it names"
+        );
     }
 
     #[tokio::test]
