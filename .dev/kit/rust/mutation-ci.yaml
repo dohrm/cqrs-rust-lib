@@ -8,10 +8,17 @@ name: Mutation
 # Runs on PR against changed code only (`--in-diff`) so it stays minutes, not
 # hours. Scoping/exclusions live in .cargo/mutants.toml (I/O crates, getters).
 #
-# This job is the WITNESS, not the first observation: the same run happens
-# locally via `just rust-mutate` before the push (the merge-base diff is
-# computable on a laptop). If survivors are being discovered here rather than in
-# the editor, the local loop is not being run — see rules/testing/ratchet.md.
+# THIS JOB IS THE GATE. It is not a witness of a local run: mutation
+# left the agent's pre-push loop because it was measured at ~19 minutes on a
+# 65-mutant diff, and its remaining lever is `-j` — cores a laptop cannot spend
+# while the editor and the agent are using them. A runner can. Surfacing survivors
+# here is the design, not a sign the local loop was skipped; `just rust-mutate`
+# stays available to buy back a round trip on code you doubt.
+#
+# Because this is the gate, the compiler cache below is PART OF IT, not a tuning
+# option: the same workspace took 972 s of baseline build cold and 113 s with
+# sccache warm. A cold runner turns this job from minutes into a quarter of an
+# hour, and a slow gate is one somebody eventually removes.
 #
 # CALIBRATION PHASE: this job is NON-BLOCKING (continue-on-error) on purpose. A
 # healthy repo often sits ~70% (below a naive 0.75 bar). First establish
@@ -36,11 +43,14 @@ env:
 jobs:
   mutation:
     runs-on: linux                     # ADAPT to your runner label
-    continue-on-error: true            # ← remove once baselines are ratcheted
-    # ADAPT (optional): on a persistent self-hosted runner, a shared compiler cache and
-    # a target dir OUTSIDE the workspace turn a 20-minute mutation run into a few. Both
-    # are paths on YOUR runner, so they are commented out — an absolute path from
-    # someone else's machine is a silent failure waiting on yours.
+    continue-on-error: true            # ← CALIBRATION ONLY. Remove it: this is the gate.
+    # WIRE THIS. On a persistent runner a shared compiler cache and a target dir
+    # OUTSIDE the workspace are what keep this gate in minutes — measured 972 s → 113 s
+    # of baseline build. The VALUES are paths on YOUR runner, so they stay as
+    # placeholders (an absolute path from someone else's machine is a silent failure
+    # waiting on yours), but skipping the block is not the neutral choice it looks like.
+    # An ephemeral runner has no warm cache: give it a persistent one, or expect the
+    # cold numbers.
     # env:
     #   RUSTC_WRAPPER: sccache            # or the absolute path on your runner
     #   CARGO_TARGET_DIR: <a writable dir on the runner, outside the workspace>

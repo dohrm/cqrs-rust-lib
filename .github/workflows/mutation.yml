@@ -1,0 +1,69 @@
+name: Mutation
+
+# Tier 3: do the tests ASSERT, or do they merely execute the code? Coverage cannot
+# answer that; mutation score can. This is what lets AI-written unit tests be trusted
+# without reading every assertion by hand.
+#
+# THIS JOB IS THE GATE, not a witness of a local run. Mutation left the agent's
+# pre-push loop on purpose (rules/agent/autonomy.md): it is compile-bound and was
+# measured in tens of minutes, and its one remaining lever is `-j` — cores a laptop
+# cannot spend while the editor and the agent are using them. A runner can. Survivors
+# surfacing here is the design; `just rust-mutate` stays available locally to buy back
+# a round trip on code you already doubt.
+#
+# Scoped to the PR diff (`--in-diff`) so it stays minutes. Exclusions and
+# `all_features = true` live in .cargo/mutants.toml — one home, shared with the local
+# recipe.
+#
+# CALIBRATION PHASE: `continue-on-error` is on. A healthy repo often sits around 70%,
+# below a naive bar, so the first runs are for establishing a per-crate baseline and
+# triaging real gaps against equivalent mutants. Remove that line to make it block —
+# that is the whole point of the job, and leaving it on forever turns the gate back
+# into a witness.
+
+on:
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  mutation:
+    name: Mutation (PR diff)
+    runs-on: ubuntu-latest
+    continue-on-error: true            # ← CALIBRATION ONLY. Remove it: this is the gate.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0               # the base branch is needed to compute the diff
+      - uses: dtolnay/rust-toolchain@stable
+      # The kit asks for a compiler cache here and says skipping it is not the neutral
+      # choice it looks like: cargo-mutants builds the copied tree COLD, so the
+      # baseline build is the single biggest term. rust-cache is what the other jobs
+      # in this repo already use — a persistent runner with sccache would be better
+      # still, but this repo runs on ephemeral GitHub runners.
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Ensure cargo-mutants
+        run: command -v cargo-mutants >/dev/null 2>&1 || cargo install cargo-mutants --locked
+
+      # Same command as the local `just rust-mutate` recipe — one definition of what
+      # "the changed code" means. `--relative` is a no-op while the workspace is at the
+      # repo root, and stays correct if it ever moves.
+      - name: Compute PR diff
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          git diff "origin/${{ github.base_ref }}...HEAD" --relative -- . > pr.diff
+          echo "Changed hunks:"; git --no-pager diff --stat "origin/${{ github.base_ref }}...HEAD" -- .
+
+      - name: Mutation testing (changed code only)
+        run: cargo mutants --in-diff pr.diff --no-shuffle -j 2 --colors never --profile mutants
+
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-out
+          path: mutants.out/

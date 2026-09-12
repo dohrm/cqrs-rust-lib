@@ -101,10 +101,10 @@ where
         events: Vec<EventEnvelope<A>>,
         session: &mut Self::Session,
     ) -> Result<(), CqrsError> {
-        if events.is_empty() {
+        let Some(first) = events.first() else {
             return Ok(());
-        }
-        let aggregate_id = events.first().unwrap().aggregate_id.clone();
+        };
+        let aggregate_id = first.aggregate_id.clone();
         session
             .1
             .entry(aggregate_id)

@@ -104,7 +104,11 @@ const DENY = [
 // read, and `sed -n` does not write at all. The pair below correlates the halves:
 // the redirect must TARGET a gate file, or a genuinely mutating command must carry
 // one among its arguments, in the same segment.
-const GATE_SRC = String.raw`(?<![\w.-])(?:lefthook\.ya?ml|[Jj]ustfile|\.coverage-baseline|mutants\.toml|deny\.toml|\.docs-budgets\.json|\.claude/settings(?:\.local)?\.json|\.cursor/hooks\.json|\.codex/config\.toml|opencode\.jsonc?|\.git(?:hub|ea)/workflows/\S*|(?:adr-check|docs-check|review-guard|bash-guard|edit-guard)\.mjs|review-prompt\.md)`
+//
+// `*.just` is in the list because the recipes live in an IMPORTED library now, not in
+// the justfile: guarding only the file that holds the `import` lines would leave the
+// commands the gate actually runs unguarded.
+const GATE_SRC = String.raw`(?<![\w.-])(?:lefthook\.ya?ml|[Jj]ustfile|\S*\.just|\.coverage-baseline|mutants\.toml|deny\.toml|\.docs-budgets\.json|\.claude/settings(?:\.local)?\.json|\.cursor/hooks\.json|\.git(?:hub|ea)/workflows/\S*|(?:adr-check|docs-check|review-guard|bash-guard|edit-guard)\.mjs|review-prompt\.md)`
 
 /** A redirect whose target is a gate file, and a mutating command carrying one in the
  *  SAME segment. Both halves come from the shared REDIRECT/MUTATOR sources above, so

@@ -1,0 +1,56 @@
+# Merge into `<rust_dir>/.cargo/config.toml` — the same directory mutants.toml goes
+# into. The installer never merges it (kit/README.md); copy what applies once.
+#
+# Both blocks below attack the BUILD term, which is what makes Tier 3 slow in Rust
+# (rust.just, "Tier 3 economics"): 972 s of cold dependency build in the baseline,
+# then ~60 s of incremental rebuild per mutant.
+
+# ── sccache — mutualizes the DEPENDENCY build across every tree on the machine ──
+# cargo-mutants copies the workspace into a scratch directory and builds it cold, so
+# the checkout's warm `target/` is worth nothing to it. sccache is what makes that
+# cold build warm: it is a content-addressed cache, so it is shared safely by every
+# repo, worktree and scratch dir at once.
+#
+#   cargo install sccache
+#   export SCCACHE_CACHE_SIZE="50G"     # a large Rust workspace's deps are GBs
+#   sccache --show-stats                # check the hit rate before and after
+#
+# It does NOT cache incremental compilation, so it skips your own workspace crates
+# in a dev build — and that is fine, because the 972 s is dependencies. Do not set
+# `CARGO_INCREMENTAL=0` globally to "fix" that: you would slow your editing loop to
+# speed up a gate. Set it only in the mutation context if you want your own crates
+# cached there too.
+#
+# ── Do NOT reach for a shared CARGO_TARGET_DIR instead ──
+# It looks like the same idea and it is the opposite one — a shared MUTABLE output
+# directory rather than an immutable cache. Three failure modes, two of them
+# regressions:
+#   1. Cargo takes an exclusive lock on the target dir, so two worktrees building at
+#      once SERIALIZE ("Blocking waiting for file lock on build directory") — it
+#      defeats exactly the parallelism it was meant to enable.
+#   2. Two branches with different features or dependency versions invalidate each
+#      other's fingerprints, so you pay MORE rebuilds, not fewer.
+#   3. It is absolute, so cargo-mutants' scratch build writes into the very
+#      directory rust-analyzer reads: mutated artifacts land in your working tree's
+#      target dir.
+# Keep the target dir per worktree; mutualize with sccache.
+
+[build]
+rustc-wrapper = "sccache"
+
+# ── A faster linker ────────────────────────────────────────────────────────
+# Linking is a large share of a Rust incremental rebuild, and an incremental rebuild
+# is what every mutant costs. mold is the biggest single win here and needs no code
+# change — only that it is installed (`apt install mold`, `brew install mold`).
+#
+# Uncomment the block for your target. macOS: recent Xcode ships a fast default
+# linker, so measure before adding one — `-fuse-ld=lld` with `brew install llvm` is
+# the fallback when it is still slow.
+
+# [target.x86_64-unknown-linux-gnu]
+# linker = "clang"
+# rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+# [target.aarch64-unknown-linux-gnu]
+# linker = "clang"
+# rustflags = ["-C", "link-arg=-fuse-ld=mold"]

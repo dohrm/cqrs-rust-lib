@@ -26,7 +26,7 @@
 // Node rather than bash so `just check` stays cross-platform — see kit/README.md. No
 // dependencies; Node >= 18.
 //
-// Usage:  node scripts/docs-check.mjs [docs-dir] [--strict] [--config=<file>]
+// Usage:  just docs-check   (directly: node .dev/kit/common/docs-check.mjs [docs-dir] [--strict] [--config=<file>])
 //         (defaults: docs, .docs-budgets.json)
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'

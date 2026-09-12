@@ -22,7 +22,7 @@
 // Node rather than bash so `just check` stays cross-platform — see kit/README.md. No
 // dependencies; Node >= 18.
 //
-// Usage:  node scripts/adr-check.mjs [adr-dir] [--strict] [--config=<file>]
+// Usage:  just adr-check   (directly: node .dev/kit/common/adr-check.mjs [adr-dir] [--strict] [--config=<file>])
 //         (defaults: docs/adr, .docs-budgets.json)
 
 import { execFileSync } from 'node:child_process'

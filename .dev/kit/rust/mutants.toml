@@ -1,0 +1,84 @@
+# Mutation testing config — Tier 3 quality gate (CI + local block, NEVER in the git hook).
+# COPY to `<workspace>/.cargo/mutants.toml` and adapt the two marked lists.
+#
+# Why not in lefthook: cargo-mutants re-runs the test suite once per mutant —
+# minutes, not seconds. In a hook it would destroy the fast "agent closes its
+# own loop" loop. Mutation runs on the PR (changed code only, `--in-diff`) and
+# optionally as a nightly full sweep. See mutation-ci.yaml, and rust.just's
+# "Tier 3 economics" block for what actually costs the time.
+#
+# cargo-mutants reads this file automatically (default path .cargo/mutants.toml).
+
+# ── Generated code — shipped filled in, unlike the two lists below ──────────
+# Mutating generated code is meaningless twice over: nobody wrote the assertions
+# that would catch it, and the fix for a survivor would be editing an artifact the
+# generator overwrites. `rules/testing/ratchet.md` already names generated code as
+# a thing mutation cannot judge, and `review_exclude` in kit/common/gate.just
+# already keeps it out of code review — this is the same doctrine reaching the
+# other gate, which it previously did not.
+#
+# This protects the VARIANCE, not the average. A typical sprint diff is a few dozen
+# mutants and would not notice; the sprint that regenerates an OpenAPI or protobuf
+# client is thousands, and that is the run that makes someone turn the gate off.
+# Measured on one real workspace: 8128 mutants for a whole-tree sweep, generated
+# sources at the top of the per-file count.
+#
+# Extend it with YOUR generator's output path; delete a line your repo cannot
+# produce. Paths are relative to the workspace root.
+exclude_globs = [
+    "**/generated/**",
+    "**/*-generated/**",
+    "**/*_generated.rs",
+    "**/*.gen.rs",
+    "**/*.pb.rs",        # prost / tonic
+]
+
+# ── Unviable mutants — the cost nobody budgets for ──────────────────────────
+# An "unviable" mutant is one whose mutated code DOES NOT COMPILE: cargo-mutants
+# substitutes `Default::default()` or similar, and Rust rejects it wherever there is
+# a generic, an `impl Trait`, a builder returning `Self`, or a type with no
+# `Default`. It carries no signal about your tests — and it still costs a full build
+# attempt, because unviability cannot be predicted without compiling.
+#
+# Measured on one real diff: 34 of 65 mutants unviable, roughly two thirds of a
+# 19-minute run spent compiling code that never ran a test.
+#
+# cargo-mutants writes the list. Harvest it AFTER a run and exclude what it found:
+#
+#     cut -d: -f1 mutants.out/unviable.txt | sort | uniq -c | sort -rn | head
+#
+# Read the shape of that output, not just the lines. Clustered on a few files means
+# the mutator is working on generic or wiring code rather than domain logic — one
+# `exclude_globs` entry, stable across refactors. Scattered across many functions
+# means `exclude_re`, one entry each, and a list that churns; when that happens the
+# real fix is narrowing the scope to the domain crate, not maintaining the list.
+# Large files show up here twice over: more of these shapes, and a more expensive
+# rebuild per mutant (rust.just, "Tier 3 economics").
+
+# ── ADAPT PER REPO — I/O-heavy code (integration-tested, not unit-testable) ──
+# Mutants here survive for the WRONG reason: no unit test can catch a mutated
+# I/O branch. Excluding avoids false survivors drowning the real signal — and
+# since a survivor pays the FULL suite runtime while a killed mutant exits on the
+# first red test, a false survivor is also the most expensive kind.
+# Target pure logic (domain/aggregates); exclude reconcile loops, adapters,
+# binary entrypoints. Refine as pure logic is split out of I/O crates.
+# Append to exclude_globs above — TOML has one list per key.
+#
+#   "crates/operator/src/**",   # e.g. k8s reconcile loops = I/O
+#   "**/main.rs",               # binary entrypoints (arg parsing / wiring)
+
+# ── ADAPT PER REPO — equivalent / low-value mutants ─────────────────────────
+# Mutating a trivial accessor to a constant is technically "missed" but carries
+# no behavioural risk (often an equivalent mutant). Skip such names to keep the
+# survivor list actionable. Add entries only with a one-line justification.
+# Example (ctm-k8s-operator): trivial getters.
+exclude_re = [
+    # "RegistryEntry::name",
+    # "RegistryEntry::property",
+]
+
+# ── Safety: never let a mutant that spins forever hang CI ───────────────────
+# Each timeout is paid in full, per mutant. `--test-tool=nextest` (see rust.just's
+# `mutate_args`) gives per-test timeouts instead, which cuts the tail rather than
+# capping it.
+minimum_test_timeout = 30

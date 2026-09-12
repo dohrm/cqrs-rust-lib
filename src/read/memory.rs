@@ -1,6 +1,6 @@
 use crate::{Aggregate, CqrsError, EventEnvelope, View};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tracing::debug;
 
 /// A simple in-memory view store that can be used for testing or simple applications.
@@ -27,15 +27,26 @@ where
         }
     }
 
+    /// Locks the view map, recovering a poisoned lock.
+    ///
+    /// Poisoning means a panic unwound while one view was being written, so at most
+    /// that view is stale — whereas refusing the lock forever takes the whole store
+    /// down for every later read. This is the in-memory store for tests and simple
+    /// applications: recovering is the useful answer, and it keeps the accessors
+    /// below infallible.
+    fn lock(&self) -> MutexGuard<'_, HashMap<String, V>> {
+        self.views.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Gets a view by its ID.
     pub fn get_view(&self, view_id: &str) -> Option<V> {
-        let views = self.views.lock().unwrap();
+        let views = self.lock();
         views.get(view_id).cloned()
     }
 
     /// Gets all views in the store.
     pub fn get_all_views(&self) -> HashMap<String, V> {
-        let views = self.views.lock().unwrap();
+        let views = self.lock();
         views.clone()
     }
 
@@ -44,7 +55,7 @@ where
         debug!("Updating view with event");
 
         let view_id = V::view_id(event);
-        let mut views = self.views.lock().unwrap();
+        let mut views = self.lock();
 
         let view = views.entry(view_id.clone()).or_default();
 
@@ -60,7 +71,7 @@ where
 
     /// Clears all views from the store.
     pub fn clear(&self) {
-        let mut views = self.views.lock().unwrap();
+        let mut views = self.lock();
         views.clear();
     }
 }

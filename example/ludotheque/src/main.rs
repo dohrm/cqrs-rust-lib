@@ -5,11 +5,13 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
 
-fn init_tracing(log_level: Level) {
+fn init_tracing(
+    log_level: Level,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     let crate_name = env!("CARGO_CRATE_NAME");
     let filter = EnvFilter::from_default_env()
-        .add_directive("debug".parse().unwrap())
-        .add_directive(format!("{crate_name}={log_level}").parse().unwrap());
+        .add_directive("debug".parse()?)
+        .add_directive(format!("{crate_name}={log_level}").parse()?);
     let l = layer::<Registry>();
     let registry = tracing_subscriber::registry();
 
@@ -22,11 +24,13 @@ fn init_tracing(log_level: Level) {
         )
         .with(filter)
         .init();
+
+    Ok(())
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-    init_tracing(Level::INFO);
+    init_tracing(Level::INFO)?;
 
     let http_port: u16 = std::env::var("HTTP_PORT")
         .ok()

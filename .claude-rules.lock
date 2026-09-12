@@ -2,9 +2,14 @@
   "repo": "dohrm/claude-rules",
   "ref": "main",
   "profiles": [
-    "rust"
+    "rust",
+    "agent"
   ],
   "agents": [
     "claude"
-  ]
+  ],
+  "levels": {
+    "rust": "gates",
+    "agent": "gates"
+  }
 }

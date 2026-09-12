@@ -43,6 +43,8 @@ jobs:
         run: cargo build --features postgres
       - name: Build (mongodb)
         run: cargo build --features mongodb
+      - name: Build (surrealdb)
+        run: cargo build --features surrealdb
       - name: Build (rest + problem-json)
         run: cargo build --features rest,problem-json
       - name: Build (all features)

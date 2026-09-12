@@ -1,6 +1,6 @@
 use crate::{Aggregate, CqrsContext, CqrsError, Dispatcher, EventEnvelope};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tracing::{debug, info};
 
 /// A simple in-memory dispatcher that stores events in memory.
@@ -18,21 +18,32 @@ impl<A: Aggregate> InMemoryDispatcher<A> {
         }
     }
 
+    /// Locks the event map, recovering a poisoned lock.
+    ///
+    /// Poisoning means a panic unwound mid-dispatch, so at most one aggregate's tail
+    /// is stale — whereas refusing the lock forever takes the whole dispatcher down
+    /// for every later read. This is the in-memory dispatcher for tests and simple
+    /// applications: recovering is the useful answer, and it keeps the accessors
+    /// below infallible.
+    fn lock(&self) -> MutexGuard<'_, HashMap<String, Vec<EventEnvelope<A>>>> {
+        self.events.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Gets all events for a specific aggregate.
     pub fn get_events(&self, aggregate_id: &str) -> Vec<EventEnvelope<A>> {
-        let events = self.events.lock().unwrap();
+        let events = self.lock();
         events.get(aggregate_id).cloned().unwrap_or_default()
     }
 
     /// Gets all events stored in the dispatcher.
     pub fn get_all_events(&self) -> HashMap<String, Vec<EventEnvelope<A>>> {
-        let events = self.events.lock().unwrap();
+        let events = self.lock();
         events.clone()
     }
 
     /// Clears all events from the dispatcher.
     pub fn clear(&self) {
-        let mut events = self.events.lock().unwrap();
+        let mut events = self.lock();
         events.clear();
     }
 }
@@ -53,7 +64,7 @@ impl<A: Aggregate> Dispatcher<A> for InMemoryDispatcher<A> {
     ) -> Result<(), CqrsError> {
         debug!("Dispatching events to in-memory store");
 
-        let mut store = self.events.lock().unwrap();
+        let mut store = self.lock();
         let aggregate_events = store.entry(aggregate_id.to_string()).or_default();
 
         for event in events {

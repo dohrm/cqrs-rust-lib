@@ -9,6 +9,16 @@ The boundary this serves — an agent proposes, a human decides — is in
 `agent/decisions.md`, and it is always in context. This is the shape of the record
 itself, and it loads when you open one.
 
+```bash
+just adr-check     # status, Proposed-on-create, status-line vs HEAD
+```
+
+`--strict` turns the word ceiling and extra-section warnings into failures.
+Wiring: `.dev/kit/common/README.md`. Ceiling override: `.docs-budgets.json`
+`adr.unitCeiling`. Canonical sections are not a setting. The gate does not see
+whether `Implemented` earned its lines, whether an amendment stayed under five,
+or whether overflow went to the right home.
+
 ## Statuses
 
 | Status | Meaning | Who may set it |
@@ -61,7 +71,7 @@ things is true, and the fix is never to compress the prose:
 | Field lists, schemas, types, table shapes | `docs/DATA-MODEL.md` |
 | Screen behavior, states, wording, display rules | `docs/EXPERIENCE.md` |
 | Component boundaries, stack overview, the decision index | `docs/ARCHITECTURE.md` |
-| Sequencing, phases, what ships when | `docs/PLAN.md` |
+| Sequencing, sprints, what ships when | `.work/<slug>/PLAN.md` (ephemeral, while a capability is open) |
 | The argument for the decision, and its cost | **the ADR** |
 
 **No section outside the canonical set** — Context, Decision, Consequences,
@@ -102,25 +112,3 @@ The human reads it, changes the status line, and commits that change:
 
 The commit is what makes the acceptance real — and it is the one signal an agent
 does not produce on its own, which is why the gate keys on it.
-
-## The gate
-
-`kit/common/adr-check.mjs`, wired as `just adr-check`, fails when an ADR has no
-status or an unknown one, when a **new** ADR carries anything but `Proposed`, and
-when the **status line** of an existing ADR differs from the committed version.
-Amending prose stays green; so does moving a status *down* to `Proposed`, because
-withdrawing a claim is not making one.
-
-It **warns**, without failing, on a record over the 600-word ceiling or carrying a
-section outside the canonical five. Those are judgments a human makes, and a gate
-that fakes one is worse than no gate; the warning exists so the drift is visible
-while writing instead of at review. A repo that wants the budget enforced passes
-`--strict`, which turns both into failures.
-
-600 is a **default**. A repo moves it in `.docs-budgets.json` at its root —
-`{ "adr": { "unitCeiling": 900 } }`, or `null` for no ceiling — the same file the
-document budgets live in (`../product/documents.md`), and one the installer never
-writes, so an update cannot reset it. The canonical section list is not a setting.
-
-Like every gate: it is a file, so it can be edited. It is not a wall. It is there so
-that skipping the step has to be a deliberate, visible act rather than an oversight.

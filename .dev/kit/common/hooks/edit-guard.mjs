@@ -38,13 +38,12 @@ const DENIED = [
 const PROTECTED = [
   /(^|\/)lefthook\.ya?ml$/,
   /(^|\/)[Jj]ustfile$/,
+  /\.just$/,                                 // the imported gate library — where the recipes really live
   /(^|\/)\.git(hub|ea)\/workflows\//,
   /(^|\/)\.claude\/settings(\.local)?\.json$/,
   /(^|\/)\.cursor\/hooks\.json$/,
-  /(^|\/)\.codex\/config\.toml$/,
-  /(^|\/)opencode\.jsonc?$/,
   /(^|\/)(bash|edit)-guard\.mjs$/,
-  /(^|\/)(adr-check|docs-check|review-guard)\.mjs$/,
+  /(^|\/)(adr-check|docs-check|review-guard|worktree-status)\.mjs$/,
   /(^|\/)review-prompt\.md$/,
   /(^|\/)\.coverage-baseline$/,
   /(^|\/)mutants\.toml$/,

@@ -36,6 +36,12 @@ const SHA = /^[0-9a-f]{7,40}$/
 
 const args = process.argv.slice(2)
 const reportPath = args.find((a) => !a.startsWith('--')) ?? '.work/review-report.md'
+// `code-review` passes it; the pre-push hook must NOT. "No report" is a legitimate
+// answer to "may I push?" (declared, never simulated) but never to "did the review
+// I just ran produce a verdict?" — and that second question is what advances the
+// `.latest_review` marker, so a CLI that exits 0 having written an empty file would
+// otherwise mark code nobody read as cleared.
+const requireReport = args.includes('--require-report')
 
 const RERUN = 'Run `just code-review` to produce a fresh one.'
 
@@ -92,7 +98,14 @@ function main() {
   // the same reason; this arm is the belt to that braces.
   const text = existsSync(reportPath) ? readFileSync(reportPath, 'utf8') : null
   if (text === null || text.trim() === '') {
-    console.log(`review-guard: ${text === null ? `no ${reportPath}` : `${reportPath} is empty`} — code review not run.`)
+    const what = text === null ? `no ${reportPath}` : `${reportPath} is empty`
+    if (requireReport) {
+      console.error(`review-guard: ${what} — the reviewer produced nothing, so there is no verdict.`)
+      console.error('  Reported as "code review not run", never as green. Check the agent CLI (absent,')
+      console.error('  unauthenticated, rate-limited?) and re-run.')
+      return 1
+    }
+    console.log(`review-guard: ${what} — code review not run.`)
     console.log('  Not a pass and not a failure: hand back with "code review not run", never as green.')
     console.log(`  ${RERUN}`)
     return 0

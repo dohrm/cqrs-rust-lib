@@ -1,0 +1,7 @@
+# rustfmt — Tier 1 format gate. COPY to <rust_dir>/rustfmt.toml.
+# cargo fmt reads this automatically. The gate is `cargo fmt --all --check`
+# (just rust-lint). Defaults are the style; this file exists so an agent
+# cannot invent a local rustfmt.toml that loosens them.
+#
+# ADAPT: edition must match the workspace (Cargo.toml).
+edition = "2024"

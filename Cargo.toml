@@ -68,3 +68,13 @@ ignored = ["getrandom", "rmcp", "schemars"]
 [workspace]
 members = ["example/bank", "example/todolist", "example/ludotheque"]
 resolver = "3"
+
+# cargo-mutants rebuilds the mutated crate once per mutant, and in Rust that rebuild —
+# not the test run — is the dominant cost. Generating debuginfo is a large part of it,
+# and nobody ever opens a debugger on a mutant. `inherits = "test"` because
+# cargo-mutants drives `cargo test`, so this has to be a test profile, not a dev one.
+# Used via `--profile mutants`: `mutate_args` in the justfile, and the mutation job in
+# .github/workflows/mutation.yml. From .dev/kit/rust/cargo-profile.snippet.toml.
+[profile.mutants]
+inherits = "test"
+debug = "none"

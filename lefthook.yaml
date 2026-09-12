@@ -1,20 +1,43 @@
-# Quality gates — enforced automatically via git hooks.
-# Install: lefthook install
+# Quality gates — the GIT FLOOR of the gate layer, enforced automatically via git
+# hooks. Install: lefthook install
+#
+# Thin triggers only: the commands live in the justfile recipes, which is the one
+# place that knows where the code is (`rust_dir`) and which feature sets this
+# workspace has. The glob decides IF a recipe fires; the recipe itself always covers
+# the whole workspace. Merged from .dev/kit/{common,rust}/lefthook.snippet.yml.
+#
+# Tier 3 (mutation, code review) costs minutes and is never a hook — it runs per
+# coherent block, before the push: `just mutate-diff`, then `just code-review`.
 
+# The trunk is not a workspace: a merge is a human act, so a commit lands on a branch
+# and arrives through a PR. `only: ref` makes this a no-op on every other branch, and
+# it is also what makes Tier 3 measurable — `mutate-diff` and `code-review` diff
+# against origin/main, so work sitting uncommitted on main is work they cannot see.
+#
+# The message keeps ": " out of it on purpose: `run:` is a plain YAML scalar, and a
+# colon-space inside one is a parse error ("mapping values are not allowed in this
+# context"). An em dash costs nothing and cannot break the file.
 pre-commit:
   parallel: true
   commands:
-    fmt:
-      run: cargo fmt --all --check
-    clippy:
-      run: cargo clippy --workspace -- -D warnings
-    test:
-      run: cargo test --workspace && cargo test -p cqrs-rust-lib --features surrealdb
+    no-commit-on-trunk:
+      only:
+        - ref: main
+        - ref: master
+      run: node -e "console.error('lefthook — this repo does not commit on the trunk. Branch, commit there, open a PR.'); process.exit(1)"
+    rust:
+      glob: "**/*.rs"
+      run: just rust-lint
 
 pre-push:
   parallel: true
   commands:
-    deny:
-      run: cargo deny check licenses advisories sources
-    machete:
-      run: cargo machete --skip-target-dir
+    rust:
+      glob: "**/*.rs"
+      run: just rust-check
+    # pre-push and NEVER pre-commit: a review's cadence is per push, and what the
+    # guard defends is the moment code leaves the machine with an unanswered CRITICAL
+    # in the report. No glob — a verdict is about the branch, not about a file type.
+    # An absent or empty report passes with a notice, never silently.
+    review-guard:
+      run: just review-guard

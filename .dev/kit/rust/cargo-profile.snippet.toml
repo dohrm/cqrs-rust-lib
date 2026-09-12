@@ -1,0 +1,23 @@
+# Merge into `<rust_dir>/Cargo.toml` — the WORKSPACE root, next to [workspace].
+# The installer never merges it for you (kit/README.md); copy these lines once.
+#
+# What it buys: cargo-mutants rebuilds the mutated crate once per mutant, and that
+# rebuild — not the test run — is the dominant cost in Rust (rust.just, "Tier 3
+# economics"). Generating debuginfo is a large part of a rebuild, and no one ever
+# opens a debugger on a mutant. Measured effect is on the per-mutant term, so it
+# scales with the mutant count.
+#
+# Use it by pointing the recipe at the profile, in your ROOT justfile:
+#
+#     mutate_args := "--profile mutants"
+#
+# It is NOT the default: `--profile mutants` fails outright when this block is
+# absent, and `claude-rules update` must never break a repo that installed months
+# ago. Opt in once you have merged this.
+#
+# `inherits = "test"` because cargo-mutants drives `cargo test`, so the profile has
+# to be a test profile — not a variant of `dev`.
+
+[profile.mutants]
+inherits = "test"
+debug = "none"

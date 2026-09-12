@@ -1,5 +1,5 @@
 # Mutation testing config — Tier 3 (`just mutate-diff`), never a git hook.
-# Adapted from .claude/kit/rust/mutants.toml. cargo-mutants reads this path by default.
+# Adapted from .dev/kit/rust/mutants.toml. cargo-mutants reads this path by default.
 
 # The read backends live behind `postgres`, `mongodb` and `surrealdb`, and the REST
 # layer behind `rest`. Without this, cargo-mutants builds the default feature set, the

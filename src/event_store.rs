@@ -42,11 +42,9 @@ where
     }
 
     async fn load_aggregate(&self, aggregate_id: &str) -> Result<(A, usize), CqrsError> {
-        let maybe_snapshot = self.load_snapshot(aggregate_id).await?;
-        if maybe_snapshot.is_none() {
+        let Some(snapshot) = self.load_snapshot(aggregate_id).await? else {
             return Err(CqrsError::aggregate_not_found(aggregate_id));
-        }
-        let snapshot = maybe_snapshot.unwrap();
+        };
         let mut agg = snapshot.state;
         let version = snapshot.version;
 

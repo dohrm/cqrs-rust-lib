@@ -51,14 +51,32 @@ the code moved under it.
 
 - **Correctness**: bugs, panics, races, unhandled errors, boundary/off-by-one,
   wrong error propagation, security.
-- **AI slop** — name it: verbose comments on obvious code, abstractions "just in
-  case", copy-paste boilerplate, generic names (`data`, `result`, `tmp`, `item`)
+- **AI slop** — name it: verbose comments on obvious code, comment-only hunks
+  (reworded comments with no code change), abstractions "just in case",
+  copy-paste boilerplate, generic names (`data`, `result`, `tmp`, `item`)
   where a domain name exists, gratuitous wrappers/trait impls.
 - **YAGNI**: code serving no current requirement.
 - **Wrong layer**: logic in the wrong module/crate; architectural boundary
   crossed (hexagonal/CQRS direction, infra leaking into domain).
 - **Reinvented wheel**: an existing pattern/utility being duplicated.
 - **Complexity without justification**: a simpler form would do.
+
+### Architecture — an `Accepted` ADR is the only blocking spec
+
+Read the ADRs that bear on the changed files: the decision log in
+`docs/ARCHITECTURE.md` indexes them, and a `/tasks` worklist names the ones its
+sprint was cut against under **Constrained by**. Then:
+
+- **Code that contradicts an `Accepted` ADR is 🔴** — name the record and the
+  section it breaks. That is a fact the author can check, and it is the ONLY
+  architectural finding that earns a 🔴.
+- **Every other architectural finding is 🔵**, however strongly you hold it. A
+  `Proposed` ADR binds nothing. `EXPERIENCE.md`, `DESIGN.md` and `ARCHITECTURE.md`
+  prose are amendable on human feedback, so disagreeing with one is never grounds
+  to block a push — an ADR is the one document with a ceremony, and the one whose
+  contradiction is opposable.
+- A diff that makes an `Accepted` ADR look plainly wrong is worth a 🔵 saying so.
+  Superseding it is a human's act (`agent/decisions.md`), never a review's.
 
 ### Text/i18n string safety (high-value, easily missed)
 
@@ -72,13 +90,13 @@ into strings and "1 byte = 1 char" assumptions. In Rust: `s[i..j]`,
 ## Code Review: [file(s) or feature]
 
 ### 🔴 Critical (must fix)
-[bugs, panics, security, correctness]
+[bugs, panics, security, correctness, a contradicted `Accepted` ADR]
 
 ### 🟡 Warnings (should fix)
 [bad patterns, lint, AI slop, YAGNI]
 
 ### 🔵 Design notes (worth discussing)
-[architecture, alternatives, testability]
+[architecture with no ADR against it, alternatives, testability]
 
 ### ✅ What works
 [genuinely good decisions only — no padding]

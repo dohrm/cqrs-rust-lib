@@ -87,7 +87,11 @@ async fn mongo_database(
     let options = ClientOptions::parse(uri).await?;
     let client = mongodb::Client::with_options(options.clone())?;
 
-    Ok(client.database(&options.default_database.unwrap()))
+    let database = options
+        .default_database
+        .ok_or("the MongoDB URI must name a default database: mongodb://host:port/<db>")?;
+
+    Ok(client.database(&database))
 }
 
 pub async fn start(config: AppConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
