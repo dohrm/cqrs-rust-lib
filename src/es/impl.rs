@@ -162,6 +162,14 @@ where
     ) -> Result<Vec<EventEnvelope<A>>, CqrsError> {
         debug!("Starting commit process");
 
+        // Nothing new on an aggregate that has events: no session, no snapshot rewrite at
+        // an unchanged version. At version 0 the snapshot is the aggregate's only trace,
+        // so it is still written — or a create would return an id that does not exist.
+        if events.is_empty() && version > 0 {
+            debug!("No events to commit");
+            return Ok(vec![]);
+        }
+
         let mut session = match self.persist.start_session().await {
             Ok(session) => {
                 debug!("Session started successfully");
@@ -195,4 +203,95 @@ where
         }
     }
 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EventStoreImpl;
+    use crate::es::inmemory::InMemoryPersist;
+    use crate::testing::{TestAggregate, TestEvent};
+    use crate::{Aggregate, CqrsContext, EventStore};
+
+    async fn created() -> (
+        std::sync::Arc<EventStoreImpl<TestAggregate, InMemoryPersist<TestAggregate>>>,
+        TestAggregate,
+    ) {
+        let store = EventStoreImpl::new(InMemoryPersist::<TestAggregate>::new());
+        let (mut aggregate, version) = store.initialize_aggregate("a1").await.unwrap();
+        let created = TestEvent::Created { name: "a".into() };
+        aggregate.apply(created.clone()).unwrap();
+        let context = CqrsContext::default();
+        store
+            .commit(
+                vec![created],
+                &aggregate,
+                Default::default(),
+                version,
+                &context,
+            )
+            .await
+            .unwrap();
+        (store, aggregate)
+    }
+
+    #[tokio::test]
+    async fn an_empty_commit_leaves_the_snapshot_untouched() {
+        let (store, aggregate) = created().await;
+        let mut drifted = aggregate.clone();
+        drifted.apply(TestEvent::Incremented).unwrap();
+
+        let committed = store
+            .commit(
+                vec![],
+                &drifted,
+                Default::default(),
+                1,
+                &CqrsContext::default(),
+            )
+            .await
+            .unwrap();
+
+        assert!(committed.is_empty());
+        let snapshot = store.load_snapshot("a1").await.unwrap().unwrap();
+        assert_eq!((snapshot.state, snapshot.version), (aggregate, 1));
+    }
+
+    #[tokio::test]
+    async fn an_empty_commit_skips_the_version_check() {
+        let (store, aggregate) = created().await;
+        let stale = 7;
+
+        let committed = store
+            .commit(
+                vec![],
+                &aggregate,
+                Default::default(),
+                stale,
+                &CqrsContext::default(),
+            )
+            .await;
+
+        assert!(committed.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_create_without_events_still_persists_the_aggregate() {
+        let store = EventStoreImpl::new(InMemoryPersist::<TestAggregate>::new());
+        let (aggregate, version) = store.initialize_aggregate("a1").await.unwrap();
+
+        store
+            .commit(
+                vec![],
+                &aggregate,
+                Default::default(),
+                version,
+                &CqrsContext::default(),
+            )
+            .await
+            .unwrap();
+
+        let (_, version) = store.load_aggregate("a1").await.unwrap();
+        assert_eq!(version, 0);
+        assert!(store.initialize_aggregate("a1").await.is_err());
+    }
 }

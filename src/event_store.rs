@@ -58,6 +58,12 @@ where
         Ok((agg, latest_version))
     }
 
+    /// Appends `events` at `version` and saves the snapshot of `aggregate`.
+    ///
+    /// No events at `version > 0` writes nothing and is `Ok`, even at a stale `version`:
+    /// the journal has nothing to conflict with. At `version == 0` the commit goes through
+    /// as usual — version checked, snapshot written — so a create without events still
+    /// persists the aggregate.
     async fn commit(
         &self,
         events: Vec<A::Event>,

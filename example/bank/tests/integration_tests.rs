@@ -3,7 +3,7 @@ mod integration_tests {
     use bank::account::{Account, CreateCommands, UpdateCommands};
     use cqrs_rust_lib::es::storage::EventStoreStorage;
     use cqrs_rust_lib::es::EventStoreImpl;
-    use cqrs_rust_lib::CqrsContext;
+    use cqrs_rust_lib::{CqrsContext, EventStore};
     use mongodb::{Client, Database};
     use std::env;
     use std::fmt::Debug;
@@ -14,12 +14,12 @@ mod integration_tests {
     /// --workspace` hung for 60s and then failed on any machine without a server — the
     /// same shape `setup_pg` in the todolist example already avoided. `just db-up`
     /// provides the URI; `just test-db` passes it in.
-    async fn setup_test_db() -> Option<Database> {
+    async fn setup_test_db(name: &str) -> Option<Database> {
         let mongodb_uri = env::var("MONGODB_TEST_URI").ok()?;
         let client = Client::with_uri_str(&mongodb_uri)
             .await
             .expect("MONGODB_TEST_URI is set but does not parse");
-        let database = client.database("test_db");
+        let database = client.database(name);
         let _r = database.drop().await;
         Some(database)
     }
@@ -88,9 +88,37 @@ mod integration_tests {
         assert!(value.is_ok());
     }
 
+    /// A command may legitimately yield no events (#13). At version 0 the commit still
+    /// goes through a Mongo session, whose `insert_many` rejects an empty batch.
+    #[tokio::test]
+    async fn test_mongodb_create_without_events() {
+        let Some(db) = setup_test_db("test_db_empty_commit").await else {
+            eprintln!("skipped: MONGODB_TEST_URI unset — run `just db-up` then `just test-db`");
+            return;
+        };
+        let store = cqrs_rust_lib::prelude::mongodb::EventStorePersist::<Account>::new(db);
+        let event_store = EventStoreImpl::new(store);
+        let (account, version) = event_store.initialize_aggregate("empty").await.unwrap();
+
+        let committed = event_store
+            .commit(
+                vec![],
+                &account,
+                Default::default(),
+                version,
+                &CqrsContext::default(),
+            )
+            .await
+            .unwrap();
+
+        assert!(committed.is_empty());
+        let (_, version) = event_store.load_aggregate("empty").await.unwrap();
+        assert_eq!(version, 0);
+    }
+
     #[tokio::test]
     async fn test_mongodb_event_store() {
-        let Some(db) = setup_test_db().await else {
+        let Some(db) = setup_test_db("test_db").await else {
             eprintln!("skipped: MONGODB_TEST_URI unset — run `just db-up` then `just test-db`");
             return;
         };
