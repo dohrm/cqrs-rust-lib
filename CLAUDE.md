@@ -191,3 +191,4 @@ All three are **Accepted**. An agent only ever writes `Proposed`; moving a statu
 - `docs/migration_guide/codex_query_rejection.md`: a malformed `_q` or pagination param answers 422 instead of being dropped
 - `docs/migration_guide/snapshot_read_storage.md`: `FromSnapshotStorage` takes the snapshot table; its default mapper points at where the aggregate sits
 - `docs/migration_guide/queryable_fields.md`: `_q` bounded by the query struct (breaking), `Query::sortable_fields()`, and the `Q: Query` bound on the extractor
+- `docs/migration_guide/empty_commands.md`: an update without events commits nothing and is `Ok`; a create without events is an error

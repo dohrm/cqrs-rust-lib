@@ -162,10 +162,8 @@ where
     ) -> Result<Vec<EventEnvelope<A>>, CqrsError> {
         debug!("Starting commit process");
 
-        // Nothing new on an aggregate that has events: no session, no snapshot rewrite at
-        // an unchanged version. At version 0 the snapshot is the aggregate's only trace,
-        // so it is still written — or a create would return an id that does not exist.
-        if events.is_empty() && version > 0 {
+        // Nothing to write: no session, no snapshot rewrite at an unchanged version.
+        if events.is_empty() {
             debug!("No events to commit");
             return Ok(vec![]);
         }
@@ -272,26 +270,5 @@ mod tests {
             .await;
 
         assert!(committed.unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn a_create_without_events_still_persists_the_aggregate() {
-        let store = EventStoreImpl::new(InMemoryPersist::<TestAggregate>::new());
-        let (aggregate, version) = store.initialize_aggregate("a1").await.unwrap();
-
-        store
-            .commit(
-                vec![],
-                &aggregate,
-                Default::default(),
-                version,
-                &CqrsContext::default(),
-            )
-            .await
-            .unwrap();
-
-        let (_, version) = store.load_aggregate("a1").await.unwrap();
-        assert_eq!(version, 0);
-        assert!(store.initialize_aggregate("a1").await.is_err());
     }
 }

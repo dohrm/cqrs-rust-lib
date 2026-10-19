@@ -60,10 +60,8 @@ where
 
     /// Appends `events` at `version` and saves the snapshot of `aggregate`.
     ///
-    /// No events at `version > 0` writes nothing and is `Ok`, even at a stale `version`:
-    /// the journal has nothing to conflict with. At `version == 0` the commit goes through
-    /// as usual — version checked, snapshot written — so a create without events still
-    /// persists the aggregate.
+    /// No events writes nothing and is `Ok`, even at a stale `version`: a command that
+    /// writes nothing serializes before any concurrent write, so there is no conflict.
     async fn commit(
         &self,
         events: Vec<A::Event>,

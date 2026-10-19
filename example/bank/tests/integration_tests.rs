@@ -3,7 +3,7 @@ mod integration_tests {
     use bank::account::{Account, CreateCommands, UpdateCommands};
     use cqrs_rust_lib::es::storage::EventStoreStorage;
     use cqrs_rust_lib::es::EventStoreImpl;
-    use cqrs_rust_lib::{CqrsContext, EventStore};
+    use cqrs_rust_lib::CqrsContext;
     use mongodb::{Client, Database};
     use std::env;
     use std::fmt::Debug;
@@ -88,32 +88,19 @@ mod integration_tests {
         assert!(value.is_ok());
     }
 
-    /// A command may legitimately yield no events (#13). At version 0 the commit still
-    /// goes through a Mongo session, whose `insert_many` rejects an empty batch.
+    /// `insert_many` rejects an empty batch (#13): the persist layer accepts one on its
+    /// own, like every other backend.
     #[tokio::test]
-    async fn test_mongodb_create_without_events() {
+    async fn test_mongodb_save_no_events() {
         let Some(db) = setup_test_db("test_db_empty_commit").await else {
             eprintln!("skipped: MONGODB_TEST_URI unset — run `just db-up` then `just test-db`");
             return;
         };
         let store = cqrs_rust_lib::prelude::mongodb::EventStorePersist::<Account>::new(db);
-        let event_store = EventStoreImpl::new(store);
-        let (account, version) = event_store.initialize_aggregate("empty").await.unwrap();
 
-        let committed = event_store
-            .commit(
-                vec![],
-                &account,
-                Default::default(),
-                version,
-                &CqrsContext::default(),
-            )
-            .await
-            .unwrap();
-
-        assert!(committed.is_empty());
-        let (_, version) = event_store.load_aggregate("empty").await.unwrap();
-        assert_eq!(version, 0);
+        let mut session = store.start_session().await.unwrap();
+        store.save_events(vec![], &mut session).await.unwrap();
+        store.close_session(session).await.unwrap();
     }
 
     #[tokio::test]
