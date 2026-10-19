@@ -66,6 +66,15 @@ rust-lint:
     cd {{rust_dir}} && cargo clippy --features rest --all-targets -- -D warnings -D clippy::dbg_macro -D clippy::todo -D clippy::unimplemented -D clippy::undocumented_unsafe_blocks
     cd {{rust_dir}} && cargo clippy --workspace --lib --bins --all-features -- -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic -D clippy::string_slice
 
+# ── Tier 3 review ──────────────────────────────────────────────────────────
+# OVERRIDE of .dev/kit/common/gate.just: `claude -p` inherits the user's `language`
+# setting, and a reviewer answering in French writes `### Fichiers revus`, which
+# review-guard (rightly) rejects as a report with no `### Files reviewed`. Flag
+# settings outrank user settings, so the report is pinned to English — the language
+# of every artifact here (rules/common/language.md). Same command otherwise.
+review-claude:
+    claude -p --settings '{"language":"english"}' --disallowedTools '{{review_deny}}' --allowedTools 'Read,Glob,Grep' < {{review_in}} > {{review_out}}
+
 # ── Test databases ─────────────────────────────────────────────────────────
 # The integration suites and the examples need a real server. `compose.yaml` starts one
 # of each on a shifted port, so this stack can never be confused with — or collide with —
