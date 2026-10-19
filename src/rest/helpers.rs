@@ -176,8 +176,8 @@ pub fn add_discriminator(item: &mut Value, discriminator: Option<(String, String
 fn strip_suffixes<'a>(s: &'a str, suffixes: &[&str]) -> &'a str {
     let mut result = s;
     for suffix in suffixes {
-        if result.ends_with(suffix) {
-            result = &result[..result.len() - suffix.len()]
+        if let Some(stripped) = result.strip_suffix(suffix) {
+            result = stripped
         }
     }
     result

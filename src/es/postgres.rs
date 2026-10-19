@@ -37,10 +37,6 @@ impl<C: PgConn + 'static> Drop for PgSession<C> {
     }
 }
 
-// PgSession is Send+Sync when C is
-unsafe impl<C: PgConn + Send + 'static> Send for PgSession<C> {}
-unsafe impl<C: PgConn + Sync + 'static> Sync for PgSession<C> {}
-
 #[derive(Clone, Debug)]
 pub struct PostgresPersist<A, P = SharedClient>
 where

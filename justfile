@@ -45,7 +45,8 @@ check: rust-check adr-check docs-check
 # looks alive under a workspace lint and is `dead_code` in the narrower set. Two
 # such functions passed `just check` and failed CI's legacy-path clippy.
 #
-# The third line is the library's unwrap/expect pass, kept verbatim except for
+# The lint lists are the library's, kept verbatim. The third line is its production
+# pass (unwrap/expect/panic/string_slice), kept verbatim except for
 # `--all-features` (same reason: the feature-gated backends are most of the I/O
 # code, and they are where a lock or an Option is unwrapped). `--lib --bins`, never
 # `--all-targets`: tests stay free to unwrap.
@@ -61,9 +62,9 @@ check: rust-check adr-check docs-check
 # pre-commit runs this recipe now, so a commit pays the edit price once.
 rust-lint:
     cd {{rust_dir}} && cargo fmt --all --check
-    cd {{rust_dir}} && cargo clippy --workspace --all-targets --all-features -- -D warnings
-    cd {{rust_dir}} && cargo clippy --features rest --all-targets -- -D warnings
-    cd {{rust_dir}} && cargo clippy --workspace --lib --bins --all-features -- -D clippy::unwrap_used -D clippy::expect_used
+    cd {{rust_dir}} && cargo clippy --workspace --all-targets --all-features -- -D warnings -D clippy::dbg_macro -D clippy::todo -D clippy::unimplemented -D clippy::undocumented_unsafe_blocks
+    cd {{rust_dir}} && cargo clippy --features rest --all-targets -- -D warnings -D clippy::dbg_macro -D clippy::todo -D clippy::unimplemented -D clippy::undocumented_unsafe_blocks
+    cd {{rust_dir}} && cargo clippy --workspace --lib --bins --all-features -- -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic -D clippy::string_slice
 
 # ── Test databases ─────────────────────────────────────────────────────────
 # The integration suites and the examples need a real server. `compose.yaml` starts one
