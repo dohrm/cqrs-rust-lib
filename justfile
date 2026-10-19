@@ -45,8 +45,8 @@ check: rust-check adr-check docs-check
 # looks alive under a workspace lint and is `dead_code` in the narrower set. Two
 # such functions passed `just check` and failed CI's legacy-path clippy.
 #
-# The lint lists are the library's, kept verbatim. The third line is its production
-# pass (unwrap/expect/panic/string_slice), kept verbatim except for
+# The lint lists are the library's, verbatim. The third line is its production
+# pass (unwrap/expect/panic/string_slice), changed only by
 # `--all-features` (same reason: the feature-gated backends are most of the I/O
 # code, and they are where a lock or an Option is unwrapped). `--lib --bins`, never
 # `--all-targets`: tests stay free to unwrap.
