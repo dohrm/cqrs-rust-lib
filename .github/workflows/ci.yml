@@ -4,7 +4,7 @@ on:
   push:
     branches: [ main ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, 'rfc/**' ]   # rfc/**: L4 phase PRs merge on this proof (rules/agent/autonomy.md § L4)
 
 env:
   CARGO_TERM_COLOR: always
