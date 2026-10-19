@@ -201,6 +201,16 @@ where
             }
         };
 
+        // An aggregate exists through its creation event. A handler that declines to
+        // create returns its own domain error; an empty list is a handler bug.
+        if events.is_empty() {
+            debug!("Create command produced no events");
+            return Err(CqrsError::internal(format!(
+                "{} create command produced no events",
+                A::TYPE
+            )));
+        }
+
         match self
             .process(&aggregate_id, aggregate, version, events, metadata, context)
             .await
@@ -362,11 +372,6 @@ where
             }
         };
 
-        if committed_events.is_empty() {
-            debug!("No events committed, returning early");
-            return Ok(());
-        }
-
         debug!(
             event_count = committed_events.len(),
             "Dispatching committed events to handlers"
@@ -411,6 +416,39 @@ mod tests {
 
         // Verification
         assert!(!aggregate_id.is_empty(), "Aggregate ID should not be empty");
+    }
+
+    #[tokio::test]
+    async fn a_create_without_events_is_an_error() {
+        let store = EventStoreImpl::new(InMemoryPersist::<TestAggregate>::new());
+        let engine = CqrsCommandEngine::new(store, vec![], (), Box::new(|_e| {}));
+
+        let err = engine
+            .execute_create(CreateCommand::Noop, &CqrsContext::default())
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.status, 500);
+        assert_eq!(err.message, "TEST create command produced no events");
+    }
+
+    #[tokio::test]
+    async fn an_update_without_events_succeeds_and_writes_nothing() {
+        let store = EventStoreImpl::new(InMemoryPersist::<TestAggregate>::new());
+        let engine = CqrsCommandEngine::new(store, vec![], (), Box::new(|_e| {}));
+        let context = CqrsContext::default();
+        let id = engine
+            .execute_create(CreateCommand::Initialize { name: "a".into() }, &context)
+            .await
+            .unwrap();
+
+        engine
+            .execute_update(&id, UpdateCommand::Noop, &context)
+            .await
+            .unwrap();
+
+        let (_, version) = engine.store.load_aggregate(&id).await.unwrap();
+        assert_eq!(version, 1);
     }
 
     #[tokio::test]
