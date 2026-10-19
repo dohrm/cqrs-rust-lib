@@ -1,6 +1,6 @@
 name: Mutation
 
-# Tier 3 quality gate: are the tests meaningful, or do they just execute code
+# Tier 4 quality gate: are the tests meaningful, or do they just execute code
 # without asserting? Coverage says nothing about this; mutation score does. This
 # is the gate that lets AI-written unit tests be trusted without reading every
 # assertion by hand.
@@ -35,6 +35,7 @@ on:
   pull_request:
     branches:
       - main
+      - 'rfc/**'   # L4 phase PRs merge on this proof (rules/agent/autonomy.md § L4)
 
 env:
   CARGO_TERM_COLOR: always

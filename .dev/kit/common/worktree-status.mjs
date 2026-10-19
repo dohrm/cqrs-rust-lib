@@ -4,14 +4,14 @@
 //
 // The loop's proof is local to the tree: `.work/review-report.md` is ONE file per
 // worktree, `review-guard` reads the one in the tree it runs in, and
-// `.work/<capability-slug>/` is one work unit. That is why parallel sessions get
+// `.work/<slug>/` is one work unit. That is why parallel sessions get
 // parallel trees (rules/agent/autonomy.md, "One tree, one writer") — and why, once
 // they do, nothing shows you all of them at once. This does.
 //
 // One line per worktree: branch · commits ahead of base · dirty files · worklist ·
 // review verdict + staleness. Then, indented under it, whatever that worklist's
-// `## Blocked on the human` section holds — the escalation channel `/tasks` already
-// defines, which is worth nothing if nobody walks the trees to read it.
+// `## Blocked on the human` section holds — the escalation channel `/rfc` and
+// `/loop-setup` already define, which is worth nothing if nobody walks the trees to read it.
 //
 // It ALWAYS exits 0, and it is read-only. A dashboard that fails is a dashboard
 // nobody runs, and the verdict printed here is a REPORT of a gate, never the gate:
@@ -92,25 +92,27 @@ function blockedIn(file) {
     .filter((l) => l && !/^[-*]?\s*<[^>]*>$/.test(l))
 }
 
-/** Every state file an agent escalates in, under `.work/<capability-slug>/`: the
- *  sprint worklists `/tasks` cuts, and the `loop.md` `/loop-setup` writes when
- *  there is no sprint to cut. Sorted so the newest sorts last. */
+const RANK = ['defect.md', 'loop.md', 'rfc.md']
+
+/** Every state file an agent escalates in, under `.work/<slug>/`, ranked:
+ *  `defect.md` from `/defect`, then `loop.md` from `/loop-setup`, then `rfc.md` from `/rfc`. Within one
+ *  slug the highest rank comes last and is the one shown: an RFC takes over the bug or
+ *  loop it came from. */
 function worklists(root) {
   const found = []
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue
     const slug = entry.name
     const add = (rel) =>
-      found.push({ label: `${slug}/${rel.replace(/\.md$/, '')}`, path: join(root, slug, ...rel.split('/')) })
-    if (existsSync(join(root, slug, 'loop.md'))) add('loop.md')
-    try {
-      for (const n of readdirSync(join(root, slug, 'tasks'))) if (/\.md$/.test(n)) add(`tasks/${n}`)
-    } catch { /* no tasks/ yet: the capability is planned, not cut */ }
+      found.push({ slug, file: rel, label: `${slug}/${rel.replace(/\.md$/, '')}`, path: join(root, slug, ...rel.split('/')) })
+    for (const name of RANK) if (existsSync(join(root, slug, name))) add(name)
   }
-  return found.sort((a, b) => a.label.localeCompare(b.label))
+  // By slug, then by rank — never by the spelling of the file name.
+  return found.sort((a, b) => a.slug.localeCompare(b.slug) || RANK.indexOf(a.file) - RANK.indexOf(b.file))
 }
 
-/** The newest worklist in a tree, plus what it says is blocked. */
+/** The newest worklist in a tree, plus what every slug's winning worklist says is
+ *  blocked: two works in one tree each keep their escalation visible. */
 function worklistState(tree) {
   let found = []
   try {
@@ -121,7 +123,10 @@ function worklistState(tree) {
   if (!found.length) return { label: '—', blocked: [] }
   const newest = found[found.length - 1]
   const label = newest.label + (found.length > 1 ? ` (+${found.length - 1})` : '')
-  return { label, blocked: blockedIn(newest.path) }
+  const winners = new Map(found.map((w) => [w.slug, w]))
+  const blocked = [...winners.values()].flatMap((w) =>
+    blockedIn(w.path).map((line) => (w === newest ? line : `${w.label}: ${line.replace(/^[-*]\s*/, '')}`)))
+  return { label, blocked }
 }
 
 const listed = git(process.cwd(), 'worktree', 'list', '--porcelain')

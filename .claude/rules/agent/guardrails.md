@@ -7,27 +7,30 @@ code a tired human can understand six months later.
 
 ## Non-negotiables
 
-- Implement the smallest milestone slice that satisfies the request. No abstraction
-  before two concrete call sites prove it, and no framework pattern this milestone
+- Implement the smallest useful slice that satisfies the request. No abstraction
+  before two concrete call sites prove it, and no framework pattern this change
   does not need.
 - Business rules never live in UI, CLI, gateway, or connector code.
 - A TODO needs a concrete issue, milestone, or stated deferred scope. Nothing else
   earns one.
 - Never silently change user-visible behavior, filesystem layout, security policy,
-  or milestone scope.
-- **A dependency is a decision, not a convenience.** Say why in the change summary,
-  and check it: needed by *this* milestone, maintained enough for the risk, clean
+  or agreed scope.
+- **A dependency needs a reason.** Apply `agent/decisions.md` to decide whether it
+  is an architectural decision or an implementation choice. Say why in the change summary,
+  and check it: needed by *this* change, maintained enough for the risk, clean
   through the supply-chain gate (e.g. `cargo deny`), not a duplicate of one already
   there.
-- **Behavior change ⇒ doc change** — milestone scope and exit criteria, module
+- **Behavior change ⇒ doc change** — agreed scope and exit criteria, module
   boundaries, runtime responsibilities, filesystem layout, trust levels,
   sandbox/approval behavior, CLI commands, user-visible configuration.
 
 ## Before coding
 
-Which milestone is this? Which module owns the behavior, and which boundary does it
-cross? What is the smallest useful vertical slice? How will a test catch the failure?
-Any answer unclear → update the docs or ask, before writing code.
+Identify the requested outcome, the module that owns it, affected boundaries and
+how to verify the change. Use the RFC when one exists. A small correction or an
+authorized adjustment does not require a new RFC; update the affected
+documents as part of the change. Ask only when an unresolved choice affects scope
+or correctness. For a conflict with an accepted ADR, use `agent/decisions.md`.
 
 ## During coding
 

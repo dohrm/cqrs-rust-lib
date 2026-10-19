@@ -31,6 +31,7 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
+import { checkExperience } from './experience-check.mjs'
 
 const args = process.argv.slice(2)
 const strict = args.includes('--strict')
@@ -129,7 +130,7 @@ const LIVING = [
     name: 'plan',
     index: 'PLAN.md',
     units: 'plan',
-    unitMarker: /^##\s*Phase\s/gm, // the single-file shape, from the /plan template
+    unitMarker: /^##\s*Phase\s/gm, // the legacy single-file shape (the retired /plan template)
     ...budgets.plan,
   },
   {
@@ -245,7 +246,7 @@ const EXPLAIN = {
     ' an ADR). Split it; do not compress the reasoning.',
   split:
     'A document meant to grow becomes a directory of units plus an index — growth adds a file,' +
-    ' it never lengthens an existing section. /prd and /plan do the migration.',
+    ' it never lengthens an existing section. /prd does the migration; split a plan by hand.',
   continued:
     'A `(continued)` heading is growth by inflation: the new scope was appended to an existing' +
     ' section instead of arriving as its own unit.',
@@ -290,6 +291,7 @@ function main() {
   const problems = []
   const warnings = []
   for (const doc of LIVING) checkLiving(doc, problems, warnings)
+  checkExperience(docsDir, problems)
   checkContinued(warnings)
 
   if (warnings.length > 0) report(warnings)

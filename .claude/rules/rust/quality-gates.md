@@ -8,13 +8,13 @@ title: "Rust Quality Gates"
 just rust-check     # rust-lint → tests → deny + machete
 ```
 
-`rust-lint` is pre-commit; `rust-check` is pre-push and `just check`. Tier 3 is `just rust-mutate` — never a hook. Wiring: `.dev/kit/rust/README.md`.
+`rust-lint` is pre-commit; `rust-check` is pre-push and `just check`. Tier 4 is `just rust-mutate` — never a hook. Wiring: `.dev/kit/rust/README.md`.
 
 | Recipe | Command | Config |
 |---|---|---|
 | `rust-lint` | `cargo fmt --all --check` | `rustfmt.toml` → `<rust_dir>/` |
-| `rust-lint` | `cargo clippy --workspace --all-targets -- -D warnings` | — |
-| `rust-lint` | `cargo clippy --workspace --lib --bins -- -D clippy::unwrap_used -D clippy::expect_used` | — |
+| `rust-lint` | `cargo clippy --workspace --all-targets -- -D warnings` + `dbg_macro` `todo` `unimplemented` `undocumented_unsafe_blocks` | — |
+| `rust-lint` | `cargo clippy --workspace --lib --bins` + `unwrap_used` `expect_used` `panic` `string_slice` | — |
 | `rust-check` | `cargo test --workspace` | — |
 | `rust-check` | `cargo deny check licenses advisories sources` | `deny.toml` → `<rust_dir>/` |
 | `rust-check` | `cargo machete --skip-target-dir` | — |

@@ -22,6 +22,8 @@
 // | CRITICAL, any sha                   | BLOCK   | otherwise one more commit expires a     |
 // |                                     |         | CRITICAL — the hole this closes         |
 // | markers unreadable                  | BLOCK   | a malformed report is a falsifiable one |
+// `--expect-files <list>` is the recipe's completeness check on the TEMP report, before
+// it is promoted — see "Completeness" below. The pre-push hook never passes it.
 // The markers are read LAST-wins, so a contract quoted mid-report is prose, not a
 // second verdict — and a report that signs off with a few lines of prose after them
 // still parses. A fixed-size tail window did neither reliably.
@@ -35,13 +37,21 @@ const REVIEWED_MARKER = /^<!--\s*REVIEWED:\s*(.*?)\s*-->\s*$/gm
 const SHA = /^[0-9a-f]{7,40}$/
 
 const args = process.argv.slice(2)
-const reportPath = args.find((a) => !a.startsWith('--')) ?? '.work/review-report.md'
+const flagValue = (name) => {
+  const i = args.indexOf(name)
+  return i === -1 ? null : (args[i + 1] ?? '')
+}
+// `--expect-files <list>` takes a value, so the report is the first positional that is
+// neither a flag nor that value.
+const expectFiles = flagValue('--expect-files')
+const reportPath = args.find((a, i) => !a.startsWith('--') && args[i - 1] !== '--expect-files')
+  ?? '.work/review-report.md'
 // `code-review` passes it; the pre-push hook must NOT. "No report" is a legitimate
 // answer to "may I push?" (declared, never simulated) but never to "did the review
 // I just ran produce a verdict?" — and that second question is what advances the
 // `.latest_review` marker, so a CLI that exits 0 having written an empty file would
 // otherwise mark code nobody read as cleared.
-const requireReport = args.includes('--require-report')
+const requireReport = args.includes('--require-report') || args.includes('--expect-files')
 
 const RERUN = 'Run `just code-review` to produce a fresh one.'
 
@@ -82,6 +92,93 @@ function malformations(verdict, sha) {
   return out
 }
 
+// ── Completeness (`--expect-files`) ─────────────────────────────────────────
+// A verdict over files the reviewer never looked at is the failure an agent produces on
+// a large diff: it reviews some files, skips others, and still signs CLEAN. So the
+// report names every file it reviewed (`### Files reviewed`), and each finding points at
+// a `path:line` that exists. Checked by the recipe on the TEMP report, before it is
+// promoted — on the promoted one, a pre-push run would already have let an incomplete
+// CLEAN through. Exit codes, for the recipe:
+//   0  complete — promote it
+//   1  incomplete — do not promote: the previous report stands, the marker stays
+//   3  incomplete, but CRITICAL or with unreadable markers — promote it anyway, then
+//      fail: a CRITICAL is never hidden, and a truncated report still BLOCKS as
+//      malformed instead of leaving an older CLEAN standing
+// `--expect-files` implies `--require-report`: an empty temp report is never promoted.
+//
+// A Location is `path:line` or `path:start-end`; a trailing `:col` is ignored, `**Location:**`
+// and an en-dash range are accepted, `\` separators are read as `/`. A Location that does
+// not parse is not checked — a floor, not a parser of every way a model writes a place.
+const LOCATION = /\*\*Location:?\*\*:?[ \t]*`?([^\s`:]+?):(\d+)(?:[-–](\d+))?(?::\d+)?`?(?=[\s·,.;)]|$)/g
+
+/** The text of the `### Files reviewed` section, or null when there is none. */
+function filesReviewed(text) {
+  const m = text.match(/^###\s+Files reviewed\s*$([\s\S]*?)(?=^#{2,3}\s|^<!--|(?![\s\S]))/m)
+  return m ? m[1] : null
+}
+
+/** Whether `section` names `path` as a whole path: `src/lib.rs` must not be "named" by
+ *  `crates/x/src/lib.rs`, nor `a.rs` by `data.rs`. */
+function names(section, path) {
+  const escaped = path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`(?<![\\p{L}\\p{N}_./-])(?:\\./)?${escaped}(?![\\p{L}\\p{N}_/-]|\\.[\\p{L}\\p{N}_])`, 'u')
+    .test(section)
+}
+
+/** The number of lines of `path` as of HEAD, or null when it does not exist there.
+ *  Untrimmed and unbounded: blank edges count, and a large file is not "missing". */
+function linesAtHead(path) {
+  let body
+  try {
+    body = execFileSync('git', ['cat-file', '-p', `HEAD:${path}`],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1 << 30 })
+  } catch {
+    return null
+  }
+  if (body === '') return 0
+  return body.split('\n').length - (body.endsWith('\n') ? 1 : 0)
+}
+
+/** Why a `path:line` does not exist as of HEAD, or null when it does. */
+function badLocation(path, start, end) {
+  const lines = linesAtHead(path)
+  if (lines === null) return `${path} does not exist as of HEAD`
+  const last = Number(end ?? start)
+  if (Number(start) < 1 || last > lines || last < Number(start))
+    return `${path}:${start}${end ? `-${end}` : ''} is outside the file (${lines} lines)`
+  return null
+}
+
+function completeness(text, listPath) {
+  if (!existsSync(listPath)) {
+    console.error(`review-guard: no file list at ${listPath} — nothing to check the report against.`)
+    return 1
+  }
+  // NUL-separated (`git diff --name-only -z`): a path may hold any byte but NUL.
+  const expected = readFileSync(listPath, 'utf8').split('\0').filter(Boolean)
+  const problems = []
+  const section = filesReviewed(text)
+  if (section === null) problems.push('no `### Files reviewed` section.')
+  else for (const f of expected) if (!names(section, f)) problems.push(`Files reviewed does not name ${f}.`)
+  for (const [, path, start, end] of text.matchAll(LOCATION)) {
+    const why = badLocation(path.replaceAll('\\', '/'), start, end)
+    if (why) problems.push(`Location ${why}.`)
+  }
+  if (problems.length === 0) return 0
+
+  const verdict = lastMarker(text, VERDICT_MARKER)
+  const blocking = verdict === 'CRITICAL'
+    || malformations(verdict, lastMarker(text, REVIEWED_MARKER)).length > 0
+  console.error(`review-guard: ${reportPath} is incomplete — a verdict over files nobody read clears nothing.`)
+  for (const p of problems) console.error(`  ${p}`)
+  console.error(blocking
+    ? '  It still blocks (CRITICAL, or markers nobody can read), so it replaces the standing report.'
+    : '  It is not promoted: the previous report stands and the marker does not move. Its\n'
+      + '  findings still stand — `code-review` keeps it as .work/review-incomplete.md: fix what\n'
+      + '  it found, then re-run the review.')
+  return blocking ? 3 : 1
+}
+
 /** How far HEAD has drifted from the reviewed commit, in prose. */
 function drift(sha, head) {
   const count = git('rev-list', '--count', `${sha}..${head}`)
@@ -97,6 +194,7 @@ function main() {
   // absent-report escape. The recipe writes to a temp file and moves it into place for
   // the same reason; this arm is the belt to that braces.
   const text = existsSync(reportPath) ? readFileSync(reportPath, 'utf8') : null
+  if (expectFiles !== null && text !== null && text.trim() !== '') return completeness(text, expectFiles)
   if (text === null || text.trim() === '') {
     const what = text === null ? `no ${reportPath}` : `${reportPath} is empty`
     if (requireReport) {

@@ -1,11 +1,11 @@
-# Mutation testing config — Tier 3 quality gate (CI + local block, NEVER in the git hook).
+# Mutation testing config — Tier 4 quality gate (CI + local block, NEVER in the git hook).
 # COPY to `<workspace>/.cargo/mutants.toml` and adapt the two marked lists.
 #
 # Why not in lefthook: cargo-mutants re-runs the test suite once per mutant —
 # minutes, not seconds. In a hook it would destroy the fast "agent closes its
 # own loop" loop. Mutation runs on the PR (changed code only, `--in-diff`) and
 # optionally as a nightly full sweep. See mutation-ci.yaml, and rust.just's
-# "Tier 3 economics" block for what actually costs the time.
+# "Tier 4 economics" block for what actually costs the time.
 #
 # cargo-mutants reads this file automatically (default path .cargo/mutants.toml).
 
@@ -17,8 +17,8 @@
 # already keeps it out of code review — this is the same doctrine reaching the
 # other gate, which it previously did not.
 #
-# This protects the VARIANCE, not the average. A typical sprint diff is a few dozen
-# mutants and would not notice; the sprint that regenerates an OpenAPI or protobuf
+# This protects the VARIANCE, not the average. A typical RFC diff is a few dozen
+# mutants and would not notice; the RFC that regenerates an OpenAPI or protobuf
 # client is thousands, and that is the run that makes someone turn the gate off.
 # Measured on one real workspace: 8128 mutants for a whole-tree sweep, generated
 # sources at the top of the per-file count.
@@ -53,7 +53,7 @@ exclude_globs = [
 # means `exclude_re`, one entry each, and a list that churns; when that happens the
 # real fix is narrowing the scope to the domain crate, not maintaining the list.
 # Large files show up here twice over: more of these shapes, and a more expensive
-# rebuild per mutant (rust.just, "Tier 3 economics").
+# rebuild per mutant (rust.just, "Tier 4 economics").
 
 # ── ADAPT PER REPO — I/O-heavy code (integration-tested, not unit-testable) ──
 # Mutants here survive for the WRONG reason: no unit test can catch a mutated

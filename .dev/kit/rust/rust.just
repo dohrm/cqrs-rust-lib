@@ -14,7 +14,7 @@
 # root justfile's managed block, which overrides this default.
 rust_dir := "."
 
-# Merge-base for Tier 3. kit/common/gate.just defines the same default when `agent
+# Merge-base for Tier 4. kit/common/gate.just defines the same default when `agent
 # --level gates` is installed; allow-duplicate-variables on the root justfile
 # lets either win. Defined here so `just rust-mutate` parses without common.
 base := "origin/main"
@@ -26,18 +26,22 @@ base := "origin/main"
 # them: rustfmt.toml → {{rust_dir}}/, deny.toml → {{rust_dir}}/, mutants.toml →
 # {{rust_dir}}/.cargo/. See README.md.
 #
-# unwrap/expect: a second clippy pass on --lib --bins only. --all-targets would
-# deny them in tests; the crate-attribute form in the old rule is no longer needed.
+# Clippy's restriction lints, opted in by name — each one is a rule in rules/rust/ a
+# machine can check instead of a reviewer. Everywhere: no `dbg!`, no `todo!` /
+# `unimplemented!` left behind, every `unsafe` block carries a `// SAFETY:` comment.
+# Production code only (a second pass on --lib --bins, since --all-targets would deny
+# them in tests): no `unwrap` / `expect` / `panic!`, no `&str` byte slicing
+# (utf8-safety.md). A real invariant keeps its `#[allow(clippy::…, reason = "…")]`.
 rust-lint:
     cd {{rust_dir}} && cargo fmt --all --check
-    cd {{rust_dir}} && cargo clippy --workspace --all-targets -- -D warnings
-    cd {{rust_dir}} && cargo clippy --workspace --lib --bins -- -D clippy::unwrap_used -D clippy::expect_used
+    cd {{rust_dir}} && cargo clippy --workspace --all-targets -- -D warnings -D clippy::dbg_macro -D clippy::todo -D clippy::unimplemented -D clippy::undocumented_unsafe_blocks
+    cd {{rust_dir}} && cargo clippy --workspace --lib --bins -- -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic -D clippy::string_slice
 rust-check: rust-lint
     cd {{rust_dir}} && cargo test --workspace
     cd {{rust_dir}} && cargo deny check licenses advisories sources
     cd {{rust_dir}} && cargo machete --skip-target-dir
 
-# ── Tier 3 economics ───────────────────────────────────────────────────────
+# ── Tier 4 economics ───────────────────────────────────────────────────────
 # Measured on one real workspace, and the numbers decide which levers are worth
 # having: a 32-mutant diff took ~50 minutes, of which **22 were the BASELINE** —
 # 972 s of build plus 363 s of test BEFORE the first mutant. cargo-mutants copies

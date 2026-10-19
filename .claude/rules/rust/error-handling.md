@@ -4,7 +4,7 @@ paths:
 title: "Rust Error Handling"
 ---
 
-`unwrap` / `expect` on lib and bins: `just rust-lint`. Tests are free.
+`unwrap` / `expect` / `panic!` on lib and bins: `just rust-lint`. Tests are free. A real invariant: `#[allow(clippy::panic, reason = "…")]`.
 
 | Context | Library |
 |---------|---------|
