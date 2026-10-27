@@ -1,8 +1,8 @@
 # Merge into `<rust_dir>/.cargo/config.toml` — the same directory mutants.toml goes
 # into. The installer never merges it (kit/README.md); copy what applies once.
 #
-# Both blocks below attack the BUILD term, which is what makes Tier 3 slow in Rust
-# (rust.just, "Tier 3 economics"): 972 s of cold dependency build in the baseline,
+# Both blocks below attack the BUILD term, which is what makes Tier 4 slow in Rust
+# (rust.just, "Tier 4 economics"): 972 s of cold dependency build in the baseline,
 # then ~60 s of incremental rebuild per mutant.
 
 # ── sccache — mutualizes the DEPENDENCY build across every tree on the machine ──

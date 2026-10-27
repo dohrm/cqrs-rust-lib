@@ -14,8 +14,8 @@ This directory is the part that cannot.
 The floor is the same for both targets, so it is where a guarantee belongs. The
 harness layer is depth, per tool. **Never the only rampart.**
 
-(Not to be confused with the kit's `Tier 1-3`, which grade gates by *cost* —
-lint / check / mutation. These two layers are about *where* a bypass is caught.)
+(Not to be confused with the kit's `Tier 1-4`, which grade gates by *cost* —
+lint / check / review / mutation. These two layers are about *where* a bypass is caught.)
 
 ## What it does NOT do
 

@@ -4,7 +4,7 @@
 # (rust-lint / rust-check), which hold the path via the `rust_dir` variable.
 # The glob matches Rust anywhere in the tree, so it is layout-agnostic — no path
 # here. glob decides IF the recipe fires; the recipe covers the whole workspace.
-# Mutation (Tier 3) is CI-only (mutation-ci.yaml), never a hook.
+# Mutation (Tier 4) gates the PR (mutation-ci.yaml), with optional local runs, never a hook.
 
 pre-commit:
   parallel: true

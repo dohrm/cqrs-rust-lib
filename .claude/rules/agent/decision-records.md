@@ -34,10 +34,15 @@ review scheduled` — as long as the first word is one of the five.
 
 ## One record, one decision
 
-An ADR records **one** decision. The test is mechanical: if a sentence outside the
-`Decision` section says *"we will"*, it is a second decision and it needs its own
-record. `Consequences` is where costs are named, never where a new choice is
-smuggled in.
+An ADR records **one** arbitration: what was chosen, against what, at what cost.
+The bullets of its `Decision` are the parts of that arbitration, not records waiting
+to be split out. `Consequences` is where costs are named, never where an unrelated
+choice is smuggled in. Whether a choice deserves a record at all is
+`agent/decisions.md` § Which choices need an ADR.
+
+**No lock clauses.** A record never ends with *"agents must not change X without a
+new ADR"*. It binds what it arbitrated, and nothing finer. A lock on a detail turns
+every later change into a superseding record.
 
 Records that decide three things at once cannot be accepted separately, cannot be
 superseded separately, and are read by nobody — which defeats the point of writing
@@ -71,7 +76,7 @@ things is true, and the fix is never to compress the prose:
 | Field lists, schemas, types, table shapes | `docs/DATA-MODEL.md` |
 | Screen behavior, states, wording, display rules | `docs/EXPERIENCE.md` |
 | Component boundaries, stack overview, the decision index | `docs/ARCHITECTURE.md` |
-| Sequencing, sprints, what ships when | `.work/<slug>/PLAN.md` (ephemeral, while a capability is open) |
+| Sequencing, steps, local choices, what ships when | `.work/<slug>/rfc.md` (ephemeral, while the feature is open) |
 | The argument for the decision, and its cost | **the ADR** |
 
 **No section outside the canonical set** — Context, Decision, Consequences,

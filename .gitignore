@@ -22,8 +22,12 @@ target/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-# Agent working memory (plans, review reports) — never committed
-.work/
+# Working memory. RFCs and loops live in .work/<slug>/ and ARE committed —
+# a PR shows the steps it landed on. What sits directly in .work/ is
+# per-tree scratch: review report, review prompt, status.
+.work/*
+!.work/*/
+!.work/.gitignore
 
 # Diff computed by `just mutate-diff` for cargo-mutants --in-diff
 pr.diff

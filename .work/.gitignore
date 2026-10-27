@@ -1,0 +1,7 @@
+# Per-developer gate markers: what THIS clone has already reviewed / mutated.
+# Never shared — a teammate's HEAD is not yours, and neither is their verdict.
+*/.latest_review
+*/.latest_mutate
+# The ticket cache the review reads (skills/rfc/ticket.md): it holds the ticket's
+# comments, published nowhere else from this tree.
+*/review-context.md

@@ -182,6 +182,8 @@ Two details that are load-bearing, not preferences:
 
 All three are **Accepted**. An agent only ever writes `Proposed`; moving a status line is a human commit — see `.claude/rules/agent/decisions.md`.
 
+`docs/ARCHITECTURE.md` indexes them and declares the RFC store: RFCs are **GitHub issues** on `dohrm/cqrs-rust-lib`, reached with `gh`, status as `rfc:draft|ready|implementing|done` labels (§ RFC store).
+
 ## Migration Guides
 
 - `docs/migration_guide/split_aggregate.md`: Legacy single-trait -> Aggregate + CommandHandler

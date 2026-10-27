@@ -7,6 +7,10 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 ignore = [
     # rsa via surrealdb/jsonwebtoken — no fixed version available
     "RUSTSEC-2023-0071",
+    # crypto-bigint 0.5.5 via surrealdb-core -> jsonwebtoken 10 -> p256/p384 ->
+    # elliptic-curve 0.13 — fixed only in 0.7.6, no 0.5 patch. surrealdb 3.3.4 does not
+    # move off it. Drop once surrealdb depends on jsonwebtoken 11.
+    "RUSTSEC-2026-0387",
     # unmaintained crates from transitive deps (surrealdb, utoipa-axum)
     "RUSTSEC-2025-0141", # bincode via surrealdb-core
     "RUSTSEC-2024-0436", # paste via utoipa-axum / rmcp

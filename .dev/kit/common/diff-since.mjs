@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// How much of this branch a Tier-3 gate has ALREADY cleared, and from where the next
+// How much of this branch a local T3/T4 gate has ALREADY cleared, and from where the next
 // run should therefore diff.
 //
 // The problem it solves is measured, not theoretical: `code-review` and `mutate-diff`
@@ -14,8 +14,9 @@
 // last cleared. Per developer, per worktree, never shared — a teammate's HEAD is not
 // yours, and neither is their verdict (rules/agent/autonomy.md, "One tree, one
 // writer"). It is written into `.work/` because that is already the gates' scratch
-// area, and this script keeps `.work/.gitignore` carrying the two patterns, so the
-// marker stays private even in a repo that COMMITS its `.work/` plans.
+// area, and `.work/.gitignore` is kept carrying its patterns (`ensureWorkIgnored` in
+// work-slug.mjs), so the marker stays private even in a repo that COMMITS its `.work/`
+// RFCs. The slug is the RFC's when one claims this branch (work-slug.mjs).
 //
 //   node diff-since.mjs <review|mutate> --base <ref> [--slug <s>] [--incremental 0|1]
 //       prints, on stdout and alone, the ref to diff FROM. Everything else is stderr,
@@ -33,6 +34,7 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { ensureWorkIgnored, resolveSlug } from './work-slug.mjs'
 
 const KINDS = ['review', 'mutate']
 const SHA = /^[0-9a-f]{7,40}$/
@@ -66,12 +68,6 @@ function gitOk(...args) {
 const note = (msg) => console.error(`diff-since: ${msg}`)
 const short = (sha) => sha.slice(0, 7)
 
-// A slug reaches this script from a justfile variable or a branch name, and it becomes
-// a PATH. Anything outside the safe set collapses to `-`, which also flattens the `/`
-// of `feat/thing` and makes `..` unwritable — a branch cannot contain `..`, an
-// overridden `work_slug` can.
-const sanitize = (s) => s.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+/, '') || 'detached'
-
 const kind = argv[0]
 if (!KINDS.includes(kind)) {
   console.error(`usage: diff-since.mjs <${KINDS.join('|')}> --base <ref> [--slug <s>] [--incremental 0|1]`)
@@ -79,27 +75,10 @@ if (!KINDS.includes(kind)) {
   process.exit(2)
 }
 
-const slug = sanitize(flag('slug').trim() || git('symbolic-ref', '--quiet', '--short', 'HEAD') || 'detached')
+// The slug is shared with the RFC: `work-slug.mjs` says how, and why one answer for all.
+const { slug } = resolveSlug({ slug: flag('slug') })
 const dir = join('.work', slug)
 const marker = join(dir, `.latest_${kind}`)
-
-// `.work/` is gitignored in most installs and committed in some (that is why
-// `review_exclude` drops it from the diff). The marker must be private either way, so
-// the patterns are written where they hold in both cases, and only what is missing is
-// appended — a `.gitignore` the repo already owns is never rewritten.
-const PATTERNS = ['*/.latest_review', '*/.latest_mutate']
-function ensureIgnored() {
-  const file = join('.work', '.gitignore')
-  const have = existsSync(file) ? readFileSync(file, 'utf8') : null
-  const lines = have === null ? [] : have.split(/\r?\n/)
-  const missing = PATTERNS.filter((p) => !lines.includes(p))
-  if (missing.length === 0) return
-  const header = have === null
-    ? '# Per-developer gate markers: what THIS clone has already reviewed / mutated.\n'
-      + '# Never shared — a teammate\'s HEAD is not yours, and neither is their verdict.\n'
-    : ''
-  writeFileSync(file, (have === null ? '' : have.replace(/\n*$/, '\n')) + header + missing.join('\n') + '\n')
-}
 
 if (given('mark')) {
   const sha = git('rev-parse', '--verify', `${flag('mark')}^{commit}`)
@@ -109,7 +88,7 @@ if (given('mark')) {
   }
   mkdirSync(dir, { recursive: true })
   writeFileSync(marker, `${sha}\n`)
-  ensureIgnored()
+  ensureWorkIgnored()
   console.log(`${kind}: cleared through ${short(sha)} — recorded in ${marker}`)
   process.exit(0)
 }

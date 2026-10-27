@@ -4,7 +4,7 @@ on:
   push:
     branches: [ main ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, 'rfc/**' ]   # rfc/**: L4 phase PRs merge on this proof (rules/agent/autonomy.md § L4)
 
 env:
   CARGO_TERM_COLOR: always
@@ -25,6 +25,17 @@ jobs:
         run: cargo clippy --all-features --all-targets -- -D warnings
       - name: Run clippy (legacy error body, without problem-json)
         run: cargo clippy --features rest --all-targets -- -D warnings
+
+  deny:
+    name: Dependencies (cargo deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Same checks as `just rust-check`, against deny.toml. Advisories come from a
+      # live database, so this job can turn red on a PR that touched no dependency.
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses advisories sources
 
   build:
     name: Build

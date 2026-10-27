@@ -15,7 +15,7 @@ runs `just rust-check`.
 
 | Recipe | Tier | When | What it runs |
 |---|---|---|---|
-| `just rust-lint` | 1 | pre-commit | `cargo fmt --all --check` · `cargo clippy --workspace --all-targets -- -D warnings` · `cargo clippy --workspace --lib --bins -- -D clippy::unwrap_used -D clippy::expect_used` |
+| `just rust-lint` | 1 | pre-commit | `cargo fmt --all --check` · `cargo clippy --workspace --all-targets -- -D warnings` + `dbg_macro` `todo` `unimplemented` `undocumented_unsafe_blocks` · `cargo clippy --workspace --lib --bins` + `unwrap_used` `expect_used` `panic` `string_slice` |
 | `just rust-check` | 2 | pre-push, `just check` | rust-lint · `cargo test --workspace` · `cargo deny check licenses advisories sources` · `cargo machete --skip-target-dir` |
 | `just rust-mutate` | 3 | coherent block, never a hook | `cargo mutants --in-diff -j {{mutate_jobs}} {{mutate_args}}` against `{{base}}...HEAD` |
 
@@ -35,11 +35,10 @@ Once `rustup`/`cargo` are on the `PATH`, the rest is one command everywhere:
 ```bash
 rustup component add rustfmt clippy
 cargo install cargo-deny cargo-machete
-cargo install cargo-mutants   # Tier 3 only
+cargo install cargo-mutants   # Tier 4 only
 ```
 
-Optional, and every one of them is about Tier 3 being fast enough to stay in
-the loop — read **Tier 3 economics** below before installing any of them:
+Optional tools for making Tier 4 affordable on the PR and during local diagnosis — read **Tier 4 economics** below before installing any of them:
 
 ```bash
 cargo install sccache          # mutualizes the dependency build across trees
@@ -64,7 +63,7 @@ must be skipped (`cargo fmt --all` would fight the generator). Swap the
 fmt line in the root justfile and add `#![allow(clippy::all)]` on that
 crate. Most repos never need it.
 
-## Tier 3 economics — what actually costs the time
+## Tier 4 economics — what actually costs the time
 
 Measured on one real workspace, because the intuition is wrong in a way that
 changes which levers are worth pulling:
@@ -74,7 +73,7 @@ changes which levers are worth pulling:
 | Baseline build | 972 s | cargo-mutants copies the tree to a scratch dir and builds it **cold** — your warm `target/` buys nothing |
 | Baseline test | 363 s | paid again **in full by every surviving mutant** |
 | Per mutant | ~60 s | an incremental **rebuild**, not test execution |
-| A 32-mutant sprint diff | ~50 min | of which 22 min is the baseline, before the first mutant runs |
+| A 32-mutant RFC diff | ~50 min | of which 22 min is the baseline, before the first mutant runs |
 
 Two consequences worth stating out loud:
 

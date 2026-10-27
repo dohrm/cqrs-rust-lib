@@ -2,7 +2,7 @@
 # The installer never merges it for you (kit/README.md); copy these lines once.
 #
 # What it buys: cargo-mutants rebuilds the mutated crate once per mutant, and that
-# rebuild — not the test run — is the dominant cost in Rust (rust.just, "Tier 3
+# rebuild — not the test run — is the dominant cost in Rust (rust.just, "Tier 4
 # economics"). Generating debuginfo is a large part of a rebuild, and no one ever
 # opens a debugger on a mutant. Measured effect is on the per-mutant term, so it
 # scales with the mutant count.
