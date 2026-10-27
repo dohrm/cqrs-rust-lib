@@ -58,6 +58,10 @@ where
         Ok((agg, latest_version))
     }
 
+    /// Appends `events` at `version` and saves the snapshot of `aggregate`.
+    ///
+    /// No events writes nothing and is `Ok`, even at a stale `version`: a command that
+    /// writes nothing serializes before any concurrent write, so there is no conflict.
     async fn commit(
         &self,
         events: Vec<A::Event>,

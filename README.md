@@ -461,6 +461,7 @@ cargo test -p ludotheque # ludotheque integration tests
 - [Domain Error Codes](docs/migration_guide/domain_errors.md)
 - [WASM Compatibility](docs/migration_guide/wasm_compat.md)
 - [Query Trait (0.6 → 0.7)](docs/migration_guide/query_trait.md)
+- [Commands Without Events](docs/migration_guide/empty_commands.md)
 
 ## License
 

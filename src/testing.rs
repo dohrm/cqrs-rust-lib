@@ -25,6 +25,7 @@ impl From<TestError> for crate::CqrsError {
 #[cfg_attr(feature = "utoipa", derive(ToSchema))]
 pub enum CreateCommand {
     Initialize { name: String },
+    Noop,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -32,6 +33,7 @@ pub enum CreateCommand {
 pub enum UpdateCommand {
     Increment,
     Decrement,
+    Noop,
 }
 
 // Événements de test
@@ -110,6 +112,7 @@ impl CommandHandler for TestAggregate {
     ) -> Result<Vec<Self::Event>, Self::Error> {
         match command {
             CreateCommand::Initialize { name } => Ok(vec![TestEvent::Created { name }]),
+            CreateCommand::Noop => Ok(vec![]),
         }
     }
 
@@ -122,6 +125,7 @@ impl CommandHandler for TestAggregate {
         match command {
             UpdateCommand::Increment => Ok(vec![TestEvent::Incremented]),
             UpdateCommand::Decrement => Ok(vec![TestEvent::Decremented]),
+            UpdateCommand::Noop => Ok(vec![]),
         }
     }
 }

@@ -176,6 +176,10 @@ where
         events: Vec<EventEnvelope<A>>,
         session: &mut Self::Session,
     ) -> Result<(), CqrsError> {
+        // `insert_many` rejects an empty batch as an invalid argument.
+        if events.is_empty() {
+            return Ok(());
+        }
         let _r = self
             .journal_collection(Some(session))
             .insert_many(&events)
